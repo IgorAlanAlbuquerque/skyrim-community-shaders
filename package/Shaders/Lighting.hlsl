@@ -1015,6 +1015,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // LANDSCAPE
 	float2 ssdmDisplacement = float2(0, 0);
 	bool ssdmActive = false;
+	float reliefShadowMul = 1.0;
 
 #	if defined(EMAT)
 #		if defined(LANDSCAPE)
@@ -1045,6 +1046,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 complexSpecular = 1.0;  // Declare complexSpecular at a higher scope so it's available throughout the shader (NEEDED FOR STOCH. FIX)
 
 #	if defined(EMAT)
+	// Optional multiplier (default 1). Amplitude follows material data: ParallaxOccData.x (vanilla),
+	// PBRParams1.y inside sampled height / pbrRelief, terrain HeightScale in GetTerrainHeight.
+	static const float kEmatAuthoredDispRef = 0.05;
+	float ematDispMult = max(SharedData::extendedMaterialSettings.DisplacementScale, 0.01);
+#		if !defined(TRUE_PBR)
+	float ematMeshDispMag = kEmatAuthoredDispRef * ematDispMult * max(ParallaxOccData.x, 0.12);
+#		elif !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+	float ematMeshDispMag = kEmatAuthoredDispRef * ematDispMult;
+#		endif
+#		if defined(LANDSCAPE)
+	float ematTerrainDispMag = kEmatAuthoredDispRef * ematDispMult;
+#		endif
 #		if defined(PARALLAX) && !defined(TRUE_PBR)
 	if (SharedData::extendedMaterialSettings.EnableParallax) {
 		// Vanilla-style parallax maps store height in alpha (e.g. DXT5); red is not used for relief.
@@ -1057,7 +1070,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float height = TexParallaxSampler.Sample(SampParallaxSampler, uv).w;
 #			endif
 		height = ExtendedMaterials::AdjustDisplacementNormalized(height, displacementParams);
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], height - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+#			if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+		{
+			float3 Lsun = normalize(DirLightDirection.xyz);
+			float NdotL = saturate(dot(normalize(tbnTr[2]), Lsun));
+			float2 us = ExtendedMaterials::ReliefShadowUvStepTowardsLight(Lsun, normalize(tbnTr[0]), normalize(tbnTr[1]), NdotL, ematMeshDispMag);
+			float mipRel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
+			float hN = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv + us, mipRel).w;
+			hN = ExtendedMaterials::AdjustDisplacementNormalized(hN, displacementParams);
+			reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(height, hN, NdotL, ematMeshDispMag, 1.0);
+		}
+#			endif
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], height - 0.5, ematMeshDispMag, eyeIndex, 0.0.xx);
 		ssdmActive = true;
 	}
 #		endif  // PARALLAX && !TRUE_PBR
@@ -1090,7 +1114,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float cmHeight = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).w;
 #				endif
 				cmHeight = ExtendedMaterials::AdjustDisplacementNormalized(cmHeight, displacementParams);
-				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], cmHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+#					if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+				{
+					float3 Lsun = normalize(DirLightDirection.xyz);
+					float NdotL = saturate(dot(normalize(tbnTr[2]), Lsun));
+					float2 us = ExtendedMaterials::ReliefShadowUvStepTowardsLight(Lsun, normalize(tbnTr[0]), normalize(tbnTr[1]), NdotL, ematMeshDispMag);
+					float mipRel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexEnvMaskSampler);
+					float hN = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv + us, mipRel).w;
+					hN = ExtendedMaterials::AdjustDisplacementNormalized(hN, displacementParams);
+					reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(cmHeight, hN, NdotL, ematMeshDispMag, 1.0);
+				}
+#					endif
+				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], cmHeight - 0.5, ematMeshDispMag, eyeIndex, 0.0.xx);
 				ssdmActive = true;
 				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 			} else {
@@ -1142,8 +1177,26 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			pbrHeight = TexParallaxSampler.Sample(SampParallaxSampler, uv).x;
 		}
 		pbrHeight = ExtendedMaterials::AdjustDisplacementNormalized(pbrHeight, displacementParams);
+		{
+			float3 Lsun = normalize(DirLightDirection.xyz);
+			float NdotL = saturate(dot(normalize(tbnTr[2]), Lsun));
+			float2 us = ExtendedMaterials::ReliefShadowUvStepTowardsLight(Lsun, normalize(tbnTr[0]), normalize(tbnTr[1]), NdotL, ematMeshDispMag);
+			float pbrHN;
+			[branch] if ((PBRFlags & PBR::Flags::PackedDisplacementInRmaosAlpha) != 0)
+			{
+				float mipRel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexRMAOSSampler);
+				pbrHN = TexRMAOSSampler.SampleLevel(SampRMAOSSampler, uv + us, mipRel).a;
+			}
+			else
+			{
+				float mipRel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
+				pbrHN = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv + us, mipRel).x;
+			}
+			pbrHN = ExtendedMaterials::AdjustDisplacementNormalized(pbrHN, displacementParams);
+			reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(pbrHeight, pbrHN, NdotL, ematMeshDispMag, 1.0);
+		}
 		const float pbrRelief = (pbrHeight - 0.5) * PBRParams1.y;
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, refractedViewDirection, tbnTr[0], tbnTr[1], tbnTr[2], pbrRelief, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, refractedViewDirection, tbnTr[0], tbnTr[1], tbnTr[2], pbrRelief, ematMeshDispMag, eyeIndex, 0.0.xx);
 		ssdmActive = true;
 	}
 #			endif  // !FACEGEN
@@ -1229,11 +1282,39 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float weights[6];
 		weights[0] = weights[1] = weights[2] = weights[3] = weights[4] = weights[5] = 0.0;
+		// Planar terrain UV stretches on cliff sides; used to damp SSDM / relief that would otherwise smear in composite.
+		// Terrain variation hashes/offsets use TexCoord0.zw — use the same derivatives for metrics when tiling fix is on,
+		// so LandscapeSsdmTrust sees the same UV space as terrain variation (avoids swirl); trust still damps SSDM smear.
+		float2 uvDg;
+#			if defined(TERRAIN_VARIATION)
+		bool useTerrainVariationSsdm = SharedData::terrainVariationSettings.enableTilingFix;
+		[branch] if (useTerrainVariationSsdm)
+			uvDg = float2(length(ddx(input.TexCoord0.zw)), length(ddy(input.TexCoord0.zw)));
+		else
+			uvDg = float2(length(ddx(uv)), length(ddy(uv)));
+#			else
+		uvDg = float2(length(ddx(uv)), length(ddy(uv)));
+#			endif
+		float uvDerivMax = max(uvDg.x, uvDg.y);
+		float landscapeUvAniso = max(uvDerivMax, 1e-6) / max(min(uvDg.x, uvDg.y), 1e-6);
+		float2 landscapeUvMetrics = float2(landscapeUvAniso, uvDerivMax);
 #			if defined(TERRAIN_VARIATION)
 		float terrainHeight = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, dx, dy, weights);
 #			else
 		float terrainHeight = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, weights);
 #			endif
+		{
+			float3 Lsun = normalize(DirLightDirection.xyz);
+			float NdotL = saturate(dot(normalize(tbnTr[2]), Lsun));
+			float2 us = ExtendedMaterials::ReliefShadowUvStepTowardsLightLandscape(Lsun, normalize(tbnTr[0]), normalize(tbnTr[1]), NdotL, ematTerrainDispMag);
+			float weightsReliefN[6];
+#			if defined(TERRAIN_VARIATION)
+			float terrainHeightN = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv + us, mipLevels, displacementParams, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, dx, dy, weightsReliefN);
+#			else
+			float terrainHeightN = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv + us, mipLevels, displacementParams, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, weightsReliefN);
+#			endif
+			reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(terrainHeight, terrainHeightN, NdotL, ematTerrainDispMag, 1.95);
+		}
 		if (SharedData::extendedMaterialSettings.EnableHeightBlending) {
 			input.LandBlendWeights1.x = weights[0];
 			input.LandBlendWeights1.y = weights[1];
@@ -1242,7 +1323,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], terrainHeight, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], terrainHeight, ematTerrainDispMag, eyeIndex, landscapeUvMetrics);
 		ssdmActive = true;
 	}
 #			if defined(TERRAIN_VARIATION)
@@ -2895,6 +2976,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	{
 		Skylighting::applySkylighting(color.xyz, directionalAmbientColor, outputAlbedo, skylightingDiffuse);
 	}
+#	endif
+
+#	if defined(DEFERRED)
+	// Cheap relief self-shadow (toward-sun height tap only for occlusion; see CheapReliefSelfShadow).
+	color.xyz *= reliefShadowMul;
 #	endif
 
 #	if !defined(DEFERRED)

@@ -63,9 +63,11 @@ void ExtendedMaterials::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables landscape texture blending based on height. ");
 		}
-		ImGui::SliderFloat("Displacement Scale", &settings.DisplacementScale, 0.001f, 0.2f, "%.3f");
+		ImGui::SliderFloat("Displacement intensity (× authored)", &settings.DisplacementScale, 0.0f, 4.0f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Controls the strength of screen-space displacement. Higher values produce more dramatic depth.");
+			ImGui::Text(
+				"Multiplies engine / texture displacement strength (vanilla ParallaxOccData, True PBR height scale, terrain heightmaps). "
+				"1 matches authored materials; raise or lower only if you want a global tweak.");
 		}
 
 		ImGui::Spacing();
@@ -100,6 +102,10 @@ void ExtendedMaterials::LoadSettings(json& o_json)
 {
 	const bool prevDisplacement = settings.EnableParallax != 0;
 	settings = o_json;
+	// Older configs stored absolute scale (~0.05 neutral, slider max ~0.2). Convert to multiplier (~1 neutral).
+	if (settings.DisplacementScale > 0.001f && settings.DisplacementScale < 0.21f) {
+		settings.DisplacementScale = std::clamp(settings.DisplacementScale / 0.05f, 0.25f, 5.0f);
+	}
 	if (prevDisplacement != (settings.EnableParallax != 0)) {
 		globals::deferred->ClearShaderCache();
 	}

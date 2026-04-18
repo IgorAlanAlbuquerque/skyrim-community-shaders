@@ -111,13 +111,14 @@ namespace ExtendedMaterials
 	float GetMipLevelForDisplacement(float2 coords, Texture2D<float4> tex)
 	{
 		float mipLevel = ComputeMipLevelAnisotropicDisplacement(coords, tex);
-		float m = max(floor(mipLevel + 0.5), 0);
-		// Stronger global displacement amplifies texel noise / mip seams in the height field → swirls.
-		// Nudge to blurrier mips as the EMAT slider rises (smooth in log space vs default 0.05).
+		// EMAT slider must not jump height mips in whole steps — floor(log2(mult)) made peaks slide in UV vs
+		// albedo and SSDM read as texture scrolling when changing displacement intensity.
 #	if defined(EMAT)
-		float ds = SharedData::extendedMaterialSettings.DisplacementScale;
-		float mipBoost = floor(max(0.0, log2(max(1e-5, ds) * 20.0)));
-		m += mipBoost;
+		float ds = max(SharedData::extendedMaterialSettings.DisplacementScale, 0.08);
+		float mipNudge = 0.32 * max(0.0, log2(clamp(ds / 0.05, 1.0, 8.0)));
+		float m = max(floor(mipLevel + 0.5 + mipNudge), 0);
+#	else
+		float m = max(floor(mipLevel + 0.5), 0);
 #	endif
 		return min(m, 6);
 	}
@@ -185,55 +186,64 @@ namespace ExtendedMaterials
 		float mipD5 = GetMipLevelForDisplacement(coords, TexLandDisplacement5Sampler);
 		float mipC5 = GetMipLevelForDisplacement(coords, TexLandColor6Sampler);
 
+		// Match diffuse terrain variation: height taps must use the same hashed offsets (StochasticEffectParallax),
+		// not bare patch UV, or SSDM / relief sit on the wrong height features when tiling fix is on.
+#		if defined(TERRAIN_VARIATION)
+#			define EMAT_LAND_HMAP(tex, mip) StochasticEffectParallax(tex, SampTerrainParallaxSampler, coords, mip, sharedOffset, dx, dy)
+#		else
+#			define EMAT_LAND_HMAP(tex, mip) tex.SampleLevel(SampTerrainParallaxSampler, coords, mip)
+#		endif
+
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile0HasDisplacement) != 0 && w1.x > 0.01)
 		{
-			heights[0] = ScaleDisplacement(TexLandDisplacement0Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipD0).x, params[0]);
+			heights[0] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandDisplacement0Sampler, mipD0).x, params[0]);
 		}
 		else [branch] if ((PBRFlags & PBR::TerrainFlags::LandTile0PBR) != 0 && w1.x > 0.01)
 		{
-			heights[0] = ScaleDisplacement(TexColorSampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC0).w, params[0]);
+			heights[0] = ScaleDisplacement(EMAT_LAND_HMAP(TexColorSampler, mipC0).w, params[0]);
 		}
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile1HasDisplacement) != 0 && w1.y > 0.01)
 		{
-			heights[1] = ScaleDisplacement(TexLandDisplacement1Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipD1).x, params[1]);
+			heights[1] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandDisplacement1Sampler, mipD1).x, params[1]);
 		}
 		else [branch] if ((PBRFlags & PBR::TerrainFlags::LandTile1PBR) != 0 && w1.y > 0.01)
 		{
-			heights[1] = ScaleDisplacement(TexLandColor2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC1).w, params[1]);
+			heights[1] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor2Sampler, mipC1).w, params[1]);
 		}
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile2HasDisplacement) != 0 && w1.z > 0.01)
 		{
-			heights[2] = ScaleDisplacement(TexLandDisplacement2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipD2).x, params[2]);
+			heights[2] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandDisplacement2Sampler, mipD2).x, params[2]);
 		}
 		else [branch] if ((PBRFlags & PBR::TerrainFlags::LandTile2PBR) != 0 && w1.z > 0.01)
 		{
-			heights[2] = ScaleDisplacement(TexLandColor3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC2).w, params[2]);
+			heights[2] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor3Sampler, mipC2).w, params[2]);
 		}
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile3HasDisplacement) != 0 && w1.w > 0.01)
 		{
-			heights[3] = ScaleDisplacement(TexLandDisplacement3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipD3).x, params[3]);
+			heights[3] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandDisplacement3Sampler, mipD3).x, params[3]);
 		}
 		else [branch] if ((PBRFlags & PBR::TerrainFlags::LandTile3PBR) != 0 && w1.w > 0.01)
 		{
-			heights[3] = ScaleDisplacement(TexLandColor4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC3).w, params[3]);
+			heights[3] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor4Sampler, mipC3).w, params[3]);
 		}
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile4HasDisplacement) != 0 && w2.x > 0.01)
 		{
-			heights[4] = ScaleDisplacement(TexLandDisplacement4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipD4).x, params[4]);
+			heights[4] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandDisplacement4Sampler, mipD4).x, params[4]);
 		}
 		else [branch] if ((PBRFlags & PBR::TerrainFlags::LandTile4PBR) != 0 && w2.x > 0.01)
 		{
-			heights[4] = ScaleDisplacement(TexLandColor5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC4).w, params[4]);
+			heights[4] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor5Sampler, mipC4).w, params[4]);
 		}
 		[branch] if ((PBRFlags & PBR::TerrainFlags::LandTile5HasDisplacement) != 0 && w2.y > 0.01)
 		{
-			heights[5] = ScaleDisplacement(TexLandDisplacement5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipD5).x, params[5]);
+			heights[5] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandDisplacement5Sampler, mipD5).x, params[5]);
 		}
 		else [branch] if ((PBRFlags & PBR::TerrainFlags::LandTile5PBR) != 0 && w2.y > 0.01)
 		{
-			heights[5] = ScaleDisplacement(TexLandColor6Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC5).w, params[5]);
+			heights[5] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor6Sampler, mipC5).w, params[5]);
 		}
 
+#		undef EMAT_LAND_HMAP
 		float total;
 		ProcessTerrainHeightWeights(heightBlend, w1, w2, heights, weights, total);
 #		if defined(TERRAIN_VARIATION)
@@ -267,61 +277,68 @@ namespace ExtendedMaterials
 		float mipTH5 = GetMipLevelForDisplacement(coords, TexLandTHDisp5Sampler);
 		float mipC5 = GetMipLevelForDisplacement(coords, TexLandColor6Sampler);
 
+#		if defined(TERRAIN_VARIATION)
+#			define EMAT_LAND_HMAP(tex, mip) StochasticEffectParallax(tex, SampTerrainParallaxSampler, coords, mip, sharedOffset, dx, dy)
+#		else
+#			define EMAT_LAND_HMAP(tex, mip) tex.SampleLevel(SampTerrainParallaxSampler, coords, mip)
+#		endif
+
 		if (w1.x > 0.01) {
 			[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand0HasDisplacement) != 0)
 			{
-				heights[0] = ScaleDisplacement(TexLandTHDisp0Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipTH0).x, params[0]);
+				heights[0] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandTHDisp0Sampler, mipTH0).x, params[0]);
 			}
 			else
 			{
-				heights[0] = ScaleDisplacement(TexColorSampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC0).w, params[0]);
+				heights[0] = ScaleDisplacement(EMAT_LAND_HMAP(TexColorSampler, mipC0).w, params[0]);
 			}
 		}
 		if (w1.y > 0.01) {
 			[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand1HasDisplacement) != 0)
 			{
-				heights[1] = ScaleDisplacement(TexLandTHDisp1Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipTH1).x, params[1]);
+				heights[1] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandTHDisp1Sampler, mipTH1).x, params[1]);
 			}
 			else
 			{
-				heights[1] = ScaleDisplacement(TexLandColor2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC1).w, params[1]);
+				heights[1] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor2Sampler, mipC1).w, params[1]);
 			}
 		}
 		if (w1.z > 0.01) {
 			[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand2HasDisplacement) != 0)
 			{
-				heights[2] = ScaleDisplacement(TexLandTHDisp2Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipTH2).x, params[2]);
+				heights[2] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandTHDisp2Sampler, mipTH2).x, params[2]);
 			}
 			else
 			{
-				heights[2] = ScaleDisplacement(TexLandColor3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC2).w, params[2]);
+				heights[2] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor3Sampler, mipC2).w, params[2]);
 			}
 		}
 		[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand3HasDisplacement) != 0 && w1.w > 0.01)
 		{
-			heights[3] = ScaleDisplacement(TexLandTHDisp3Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipTH3).x, params[3]);
+			heights[3] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandTHDisp3Sampler, mipTH3).x, params[3]);
 		}
 		else if (w1.w > 0.01)
 		{
-			heights[3] = ScaleDisplacement(TexLandColor4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC3).w, params[3]);
+			heights[3] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor4Sampler, mipC3).w, params[3]);
 		}
 		[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand4HasDisplacement) != 0 && w2.x > 0.01)
 		{
-			heights[4] = ScaleDisplacement(TexLandTHDisp4Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipTH4).x, params[4]);
+			heights[4] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandTHDisp4Sampler, mipTH4).x, params[4]);
 		}
 		else if (w2.x > 0.01)
 		{
-			heights[4] = ScaleDisplacement(TexLandColor5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC4).w, params[4]);
+			heights[4] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor5Sampler, mipC4).w, params[4]);
 		}
 		[branch] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLand5HasDisplacement) != 0 && w2.y > 0.01)
 		{
-			heights[5] = ScaleDisplacement(TexLandTHDisp5Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipTH5).x, params[5]);
+			heights[5] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandTHDisp5Sampler, mipTH5).x, params[5]);
 		}
 		else if (w2.y > 0.01)
 		{
-			heights[5] = ScaleDisplacement(TexLandColor6Sampler.SampleLevel(SampTerrainParallaxSampler, coords, mipC5).w, params[5]);
+			heights[5] = ScaleDisplacement(EMAT_LAND_HMAP(TexLandColor6Sampler, mipC5).w, params[5]);
 		}
 
+#		undef EMAT_LAND_HMAP
 		float total;
 		ProcessTerrainHeightWeights(heightBlend, w1, w2, heights, weights, total);
 #		if defined(TERRAIN_VARIATION)
@@ -336,17 +353,90 @@ namespace ExtendedMaterials
 
 #endif
 
+	// One extra height sample stepped toward the sun in tangent UV — cheap contact shading for relief / SSDM.
+	float2 ReliefShadowUvStepTowardsLight(float3 Lws, float3 Tw, float3 Bw, float NdotL, float displacementScale)
+	{
+		float2 Ltb = float2(dot(Lws, Tw), dot(Lws, Bw));
+		float2 us = -normalize(Ltb + 1e-5) * (0.0016 + displacementScale * 0.038);
+		us *= rcp(max(NdotL, 0.11));
+		return us;
+	}
+
+	// Landscape UV spans large world patches — use a larger tangent step so the neighbor tap moves ~a texel.
+	float2 ReliefShadowUvStepTowardsLightLandscape(float3 Lws, float3 Tw, float3 Bw, float NdotL, float displacementScale)
+	{
+		float2 Ltb = float2(dot(Lws, Tw), dot(Lws, Bw));
+		float2 us = -normalize(Ltb + 1e-5) * (0.0048 + displacementScale * 0.12);
+		us *= rcp(max(NdotL, 0.11));
+		return us;
+	}
+
+	// hToward: height at uv stepped toward the sun in tangent UV. Occlusion only when that tap is higher than center.
+	// sunFacing suppresses relief on surfaces facing away from the sun.
+	float CheapReliefSelfShadow(float hC, float hToward, float NdotL, float displacementScale, float dhScale)
+	{
+		float w = saturate(displacementScale * 11.0);
+		if (w < 0.045)
+			return 1.0;
+
+		float sunFacing = saturate(NdotL * 6.2 - 0.32);
+		if (sunFacing < 0.02)
+			return 1.0;
+
+		float dh = max(0.0, (hToward - hC) * dhScale);
+		float edge = 0.13 + (1.0 - NdotL) * 0.11;
+		float occLin = saturate((dh - edge) * (3.8 + 9.0 * (1.0 - NdotL)));
+		float x = saturate(occLin * w * sunFacing * 0.42);
+		static const float kShadowPow = 1.22;
+		static const float kReliefFloor = 0.84;
+		return max(pow(saturate(1.0 - x), kShadowPow), kReliefFloor);
+	}
+
+#	if defined(LANDSCAPE)
+	// Planar landscape UV smears on cliff sides (one axis spans huge world distance). SSDM reprojects in
+	// screen space and then pulls wrong neighbors — damp when the surface is steep vs world up and when
+	// UV screen derivatives are highly anisotropic.
+	// uvMetrics: x = max(ddx,ddy)/min(ddx,ddy), y = max(|ddx|,|ddy|). Meshes pass (0,0).
+	// When y is tiny (distance / coarse footprint), x collapses toward 1 and must not lift trust — blend to
+	// slope-only trust so relief / SSDM do not ramp up incorrectly far from the camera.
+	float LandscapeSsdmTrust(float3 Nw, float2 uvMetrics)
+	{
+		float uvDerivativeAniso = uvMetrics.x;
+		float uvDerivMax = max(uvMetrics.y, 0.0);
+
+		float upA = saturate(abs(normalize(Nw).z));
+		float slopeFade = smoothstep(0.028, 0.46, upA);
+		// Screen UV derivatives shrink with distance → aniso ratio collapses toward 1 and would read as
+		// "unstretched" and lift trust. When |ddx/ddy| is tiny, blend toward a conservative high aniso so
+		// stretchFade does not incorrectly relax relief / SSDM farther from the camera.
+		float derivWeight = saturate(uvDerivMax * 14000.0);
+		float anisoResolved = lerp(max(uvDerivativeAniso, 28.0), uvDerivativeAniso, smoothstep(0.04, 1.0, derivWeight));
+		float stretchFade = 1.0;
+		if (anisoResolved > 3.5)
+			stretchFade = saturate(1.0 - smoothstep(3.5, 88.0, anisoResolved) * 0.94);
+		return saturate(slopeFade * stretchFade);
+	}
+#	endif
+
 	// POM-style tangent step (Vt.xy / Vt.z) then world-space offset and projection — same relief as parallax,
 	// with a slope-aware denominator so grazing views do not explode like 1/|Vt.z|.
 	// Callers pass surface → camera (Lighting `viewDirection`, or `refractedViewDirection` for coated PBR).
 	// The tangent step uses the ray into the surface (camera → surface), i.e. the negated view vector.
+	// landscapeUvMetrics: LANDSCAPE only — float2(aniso, maxDeriv); meshes pass (0,0). Use zw derivatives when TV tiling fix matches stochastic UV.
 	float2 ComputeDisplacementVector(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
-		float height, float displacementScale, uint eyeIndex)
+		float height, float displacementScale, uint eyeIndex, float2 landscapeUvMetrics)
 	{
 		float hRaw = clamp(height, -0.75, 0.75);
 		// Soft squash of large |h| (stacked terrain / high material height scale) — reduces spike-driven SSDM noise.
 		// Lighter squash keeps SSDM height closer to the authored map (triplanar / heavy squash read as muddy swirls).
+#	if defined(LANDSCAPE) && defined(EMAT)
+		// Keep height shape stable vs multiplier; noise is handled by mip nudge + screen hop, not extra squash
+		// that fought amplitude and made the slider feel like UV drift instead of depth.
+		float hSquashK = 0.14 + 0.10 * saturate((max(displacementScale, 1e-5) / 0.05 - 1.0) * 0.45);
+		float h = hRaw * rcp(1.0 + abs(hRaw) * hSquashK);
+#	else
 		float h = hRaw * rcp(1.0 + abs(hRaw) * 0.14);
+#	endif
 
 		float3 Tw = normalize(tbnTr0);
 		float3 Bw = normalize(tbnTr1);
@@ -371,6 +461,11 @@ namespace ExtendedMaterials
 		static const float kTangentParallaxAmpScale = 0.22;
 		float amp = h * displacementScale * (kLegacyNormalPush / kDefaultDisplacementScale) * kTangentParallaxAmpScale;
 
+#	if defined(LANDSCAPE)
+		float trust = LandscapeSsdmTrust(Nw, landscapeUvMetrics);
+		amp *= trust;
+#	endif
+
 		// World tangent step (POM), then rotate to view and project — matches camera path better than
 		// adding Tvs/Bvs directly in view when TBN is skewed or non-orthonormal.
 		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
@@ -382,10 +477,19 @@ namespace ExtendedMaterials
 
 		// Tighter screen pull when displacement is cranked — reduces incoherent neighbor blends that read as swirl.
 #	if defined(EMAT)
-		float ds = SharedData::extendedMaterialSettings.DisplacementScale;
+		// `displacementScale` argument is effective authored magnitude (see Lighting kEmatAuthoredDispRef path).
+		float ds = max(displacementScale, 1e-5);
 		float maxScreenHop = lerp(0.038, 0.021, saturate((ds - 0.05) * 14.0));
 #	else
 		float maxScreenHop = 0.038;
+#	endif
+#	if defined(LANDSCAPE)
+#		if defined(EMAT)
+		// Landscape SSDM reprojects deferred albedo from shifted pixels; extra cap vs multiplier avoids vertical streaking.
+		float dsNorm = ds / 0.05;
+		maxScreenHop *= rcp(1.0 + 0.62 * max(0.0, dsNorm - 1.0));
+#		endif
+		maxScreenHop *= lerp(0.40, 1.0, trust);
 #	endif
 		float len = length(duv);
 		if (len > maxScreenHop)

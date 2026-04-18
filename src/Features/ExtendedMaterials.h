@@ -31,7 +31,8 @@ struct ExtendedMaterials : Feature
 		uint EnableTerrain = 0;
 		uint EnableHeightBlending = 1;
 
-		float DisplacementScale = 0.05f;
+		// Multiplier on material-authored displacement (1 = default). Legacy saves used ~0.05 as absolute scale.
+		float DisplacementScale = 1.0f;
 		float pad[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
