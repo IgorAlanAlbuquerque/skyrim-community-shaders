@@ -42,6 +42,8 @@ public:
 	{
 		float roughnessScale = 1.f;
 		float displacementScale = 1.f;
+		/// When true and no separate displacement map is bound, SSDM reads height from the RMAOS texture alpha channel (same UV as RMAOS).
+		bool displacementPackedInRmaosAlpha = false;
 		float specularLevel = 0.04f;
 
 		RE::NiColor subsurfaceColor;

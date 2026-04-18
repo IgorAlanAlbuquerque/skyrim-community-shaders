@@ -118,8 +118,14 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 #if defined(SSDM)
 	{
 		float2 sourceUV = SSDMOffsetTexture[dispatchID.xy];
-		if (any(sourceUV != 0))
-			gbufferCoord = uint2(clamp(sourceUV * SharedData::BufferDim.xy, 0, SharedData::BufferDim.xy - 1));
+		// SSDMDisplaceCS refines an absolute fetch UV in full-buffer normalized space (same basis as
+		// (dispatchID + 0.5) / BufferDim), including side-by-side stereo in one render target.
+		// Do not use SharedData::ConvertUVToSampleCoord — that path expects per-eye mono UV (then
+		// stereo-packs + DR-adjusts) like depth reads from ViewToUV; applying it here double-packs
+		// VR and skews flat/DR, which reads the wrong gbuffer columns (split / ghost image).
+		if (any(sourceUV != 0)) {
+			gbufferCoord = uint2(clamp(sourceUV.xy * SharedData::BufferDim.xy, float2(0, 0), SharedData::BufferDim.xy - 1.0));
+		}
 	}
 #endif
 

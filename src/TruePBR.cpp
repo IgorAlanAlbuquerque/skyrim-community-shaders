@@ -21,6 +21,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TruePBR::PBRTextureSetData,
 	roughnessScale,
 	displacementScale,
+	displacementPackedInRmaosAlpha,
 	specularLevel,
 	subsurfaceColor,
 	subsurfaceOpacity,
@@ -116,6 +117,14 @@ void TruePBR::DrawSettings()
 				bool wasEdited = false;
 				if (ImGui::SliderFloat("Displacement Scale", &selectedPbrTextureSet->displacementScale, 0.f, 3.f, "%.3f")) {
 					wasEdited = true;
+				}
+				if (ImGui::Checkbox("SSDM: height in RMAOS alpha (no separate displacement map)", &selectedPbrTextureSet->displacementPackedInRmaosAlpha)) {
+					wasEdited = true;
+				}
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text(
+						"When enabled, screen-space displacement reads height from the alpha channel of the RMAOS texture instead of a dedicated displacement map. "
+						"Use for texture sets that pack height in RMAOS A; leave off for standard dielectric F0 in alpha.");
 				}
 				if (ImGui::SliderFloat("Roughness Scale", &selectedPbrTextureSet->roughnessScale, 0.f, 3.f, "%.3f")) {
 					wasEdited = true;
@@ -959,12 +968,33 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 			}
 
 			const bool hasDisplacement = pbrMaterial->displacementTexture != nullptr && pbrMaterial->displacementTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
+
+			TruePBR::PBRTextureSetData* meshTextureSetData = nullptr;
+			if (auto it = BSLightingShaderMaterialPBR::All.find(const_cast<BSLightingShaderMaterialPBR*>(pbrMaterial));
+				it != BSLightingShaderMaterialPBR::All.cend()) {
+				meshTextureSetData = it->second.textureSetData;
+			}
+			if (meshTextureSetData == nullptr && pbrMaterial->textureSet != nullptr) {
+				if (auto* bgsTextureSet = skyrim_cast<RE::BGSTextureSet*>(pbrMaterial->textureSet.get())) {
+					meshTextureSetData = globals::truePBR->GetPBRTextureSetData(bgsTextureSet);
+				}
+			}
+
+			const bool packedRmaosDisplacement = !hasDisplacement && meshTextureSetData != nullptr && meshTextureSetData->displacementPackedInRmaosAlpha
+				&& pbrMaterial->rmaosTexture != nullptr && pbrMaterial->rmaosTexture != graphicsState->GetRuntimeData().defaultTextureWhite;
+
 			if (hasDisplacement) {
 				shadowState->SetPSTexture(4, pbrMaterial->displacementTexture->rendererTexture);
 				shadowState->SetPSTextureAddressMode(4, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
 				shadowState->SetPSTextureFilterMode(4, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 
 				shaderFlags.set(PBRShaderFlags::HasDisplacement);
+			} else if (packedRmaosDisplacement) {
+				shadowState->SetPSTexture(4, pbrMaterial->rmaosTexture->rendererTexture);
+				shadowState->SetPSTextureAddressMode(4, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
+				shadowState->SetPSTextureFilterMode(4, RE::BSGraphics::TextureFilterMode::kAnisotropic);
+
+				shaderFlags.set(PBRShaderFlags::PackedDisplacementInRmaosAlpha);
 			}
 
 			const bool hasFeaturesTexture0 = pbrMaterial->featuresTexture0 != nullptr && pbrMaterial->featuresTexture0 != graphicsState->GetRuntimeData().defaultTextureWhite;

@@ -33,6 +33,8 @@ namespace PBR
 		static const uint HairMarschner = (1 << 10);
 		static const uint Glint = (1 << 11);
 		static const uint ProjectedGlint = (1 << 12);
+		/// Must match PBRShaderFlags::PackedDisplacementInRmaosAlpha (bit 18; avoids terrain flag bits 0–17).
+		static const uint PackedDisplacementInRmaosAlpha = (1 << 18);
 	}
 
 	namespace TerrainFlags

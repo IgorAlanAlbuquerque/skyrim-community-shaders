@@ -40,7 +40,11 @@ void ExtendedMaterials::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Screen Space Displacement", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Enable Displacement", (bool*)&settings.EnableParallax);
+		if (ImGui::Checkbox("Enable Displacement", (bool*)&settings.EnableParallax)) {
+			// DeferredCompositeCS is built with or without SSDM based on this flag; mismatch causes
+			// null SRV reads (black sky / corrupt frame) or SSDM appearing to do nothing until cache clear.
+			globals::deferred->ClearShaderCache();
+		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables screen-space displacement mapping (SSDM) on meshes and terrain.");
 		}
@@ -94,7 +98,11 @@ void ExtendedMaterials::DrawSettings()
 
 void ExtendedMaterials::LoadSettings(json& o_json)
 {
+	const bool prevDisplacement = settings.EnableParallax != 0;
 	settings = o_json;
+	if (prevDisplacement != (settings.EnableParallax != 0)) {
+		globals::deferred->ClearShaderCache();
+	}
 }
 
 void ExtendedMaterials::SaveSettings(json& o_json)
@@ -105,6 +113,7 @@ void ExtendedMaterials::SaveSettings(json& o_json)
 void ExtendedMaterials::RestoreDefaultSettings()
 {
 	settings = {};
+	globals::deferred->ClearShaderCache();
 }
 
 bool ExtendedMaterials::HasShaderDefine(RE::BSShader::Type shaderType)

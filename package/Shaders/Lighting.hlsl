@@ -947,6 +947,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
+	// Camera → fragment (matches water `normalize(WPosition)`). Shading uses viewDirection = toward camera.
+	float3 parallaxViewDirWorld = normalize(input.WorldPosition.xyz);
 
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
@@ -1044,15 +1046,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 complexSpecular = 1.0;  // Declare complexSpecular at a higher scope so it's available throughout the shader (NEEDED FOR STOCH. FIX)
 
 #	if defined(EMAT)
-#		if defined(PARALLAX)
+#		if defined(PARALLAX) && !defined(TRUE_PBR)
 	if (SharedData::extendedMaterialSettings.EnableParallax) {
-		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
-		float height = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
+		mipLevel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
+		// Vanilla-style parallax maps store height in alpha (e.g. DXT5); red is not used for relief.
+		float height = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).w;
 		height = ExtendedMaterials::AdjustDisplacementNormalized(height, displacementParams);
-		float3 normalVS = normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, normalVS, height - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, parallaxViewDirWorld, tbnTr[0], tbnTr[1], tbnTr[2], height - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
 	}
-#		endif  // PARALLAX
+#		endif  // PARALLAX && !TRUE_PBR
 
 	bool complexMaterial = false;
 	bool complexMaterialParallax = false;
@@ -1075,11 +1077,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (complexMaterial) {
 			if (envMaskSample.w > kMaskEpsilon) {
 				complexMaterialParallax = true;
-				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
+				mipLevel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexEnvMaskSampler);
 				float cmHeight = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
 				cmHeight = ExtendedMaterials::AdjustDisplacementNormalized(cmHeight, displacementParams);
-				float3 cmNormalVS =  normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
-				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, cmNormalVS, cmHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, parallaxViewDirWorld, tbnTr[0], tbnTr[1], tbnTr[2], cmHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
 				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 			} else {
 				complexMaterialColor = envMaskSample;
@@ -1098,7 +1099,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		sampledCoatColor.a *= sampledCoatProperties.a;
 	}
 #			if !defined(FACEGEN)
-	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
+	[branch] if (SharedData::extendedMaterialSettings.EnableParallax &&
+		(((PBRFlags & PBR::Flags::HasDisplacement) != 0) || ((PBRFlags & PBR::Flags::PackedDisplacementInRmaosAlpha) != 0)))
 	{
 		PBRParallax = true;
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
@@ -1119,15 +1121,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			entryNormal = normalize(mul(tbn, entryNormalTS));
 			refractedViewDirection = -refract(-viewDirection, entryNormal, eta);
 		}
+		float mipPbrRmaos = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexRMAOSSampler);
+		float mipPbrParallax = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
+		float pbrHeight;
+		[branch] if ((PBRFlags & PBR::Flags::PackedDisplacementInRmaosAlpha) != 0)
+		{
+			pbrHeight = TexRMAOSSampler.SampleLevel(SampRMAOSSampler, uv, mipPbrRmaos).a;
+		}
 		else
 		{
-			displacementParams.HeightScale *= PBRParams1.y;
+			pbrHeight = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipPbrParallax).x;
 		}
-		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
-		float pbrHeight = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
 		pbrHeight = ExtendedMaterials::AdjustDisplacementNormalized(pbrHeight, displacementParams);
-		float3 pbrNormalVS = normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, pbrNormalVS, pbrHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		const float pbrRelief = (pbrHeight - 0.5) * PBRParams1.y;
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, parallaxViewDirWorld, tbnTr[0], tbnTr[1], tbnTr[2], pbrRelief, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
 	}
 #			endif  // !FACEGEN
 #		endif      // TRUE_PBR
@@ -1195,12 +1202,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			else
 	if (SharedData::extendedMaterialSettings.EnableTerrain || (SharedData::extendedMaterialSettings.EnableParallax && Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLandHasDisplacement)) {
 #			endif
-		mipLevels[0] = ExtendedMaterials::GetMipLevel(uv, TexColorSampler, screenNoise);
-		mipLevels[1] = ExtendedMaterials::GetMipLevel(uv, TexLandColor2Sampler, screenNoise);
-		mipLevels[2] = ExtendedMaterials::GetMipLevel(uv, TexLandColor3Sampler, screenNoise);
-		mipLevels[3] = ExtendedMaterials::GetMipLevel(uv, TexLandColor4Sampler, screenNoise);
-		mipLevels[4] = ExtendedMaterials::GetMipLevel(uv, TexLandColor5Sampler, screenNoise);
-		mipLevels[5] = ExtendedMaterials::GetMipLevel(uv, TexLandColor6Sampler, screenNoise);
 
 		displacementParams[1] = displacementParams[0];
 		displacementParams[2] = displacementParams[0];
@@ -1231,8 +1232,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
-		float3 terrainNormalVS =  normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, terrainNormalVS, terrainHeight, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, parallaxViewDirWorld, tbnTr[0], tbnTr[1], tbnTr[2], terrainHeight, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
 	}
 #			if defined(TERRAIN_VARIATION)
 	else if (useTerrainVariation) {
