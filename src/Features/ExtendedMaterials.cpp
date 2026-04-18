@@ -196,38 +196,11 @@ void ExtendedMaterials::SetupResources()
 			.Texture2D = { .MipSlice = 0 } });
 	}
 
-	ssdmCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<SSDMCB>());
-
-	{
-		D3D11_SAMPLER_DESC samplerDesc = {
-			.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-			.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP,
-			.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP,
-			.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP,
-			.MaxAnisotropy = 1,
-			.MinLOD = 0,
-			.MaxLOD = D3D11_FLOAT32_MAX
-		};
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, ssdmLinearSampler.put()));
-	}
-
 	ClearShaderCache();
 }
 
 void ExtendedMaterials::ClearShaderCache()
 {
-	ssdmBuildPyramidCS = nullptr;
-	ssdmDisplaceCS = nullptr;
-
-	auto shaderDir = std::filesystem::path("Data\\Shaders\\ExtendedMaterials");
-
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(
-			Util::CompileShader((shaderDir / "SSDMBuildPyramidCS.hlsl").c_str(), {}, "cs_5_0")))
-		ssdmBuildPyramidCS.attach(rawPtr);
-
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(
-			Util::CompileShader((shaderDir / "SSDMDisplaceCS.hlsl").c_str(), {}, "cs_5_0")))
-		ssdmDisplaceCS.attach(rawPtr);
 }
 
 void ExtendedMaterials::RegisterDisplacementRT()
@@ -258,88 +231,14 @@ void ExtendedMaterials::DrawSSDM()
 {
 	if (!settings.EnableParallax)
 		return;
-	if (!ssdmBuildPyramidCS || !ssdmDisplaceCS)
-		return;
 	if (!texDisplacement || !texSSDMLevel[0])
 		return;
 
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "SSDM");
 
-	auto context = globals::d3d::context;
-
-	uint w = texDisplacement->desc.Width;
-	uint h = texDisplacement->desc.Height;
-	int maxMip = SSDM_MIP_LEVELS - 1;
-
-	ID3D11SamplerState* samplers[] = { ssdmLinearSampler.get() };
-	context->CSSetSamplers(0, 1, samplers);
-
-	ID3D11Buffer* cbs[] = { ssdmCB->CB() };
-	context->CSSetConstantBuffers(0, 1, cbs);
-
-	// Build mip pyramid of displacement vectors (level 0 → levels 1..maxMip)
-	context->CSSetShader(ssdmBuildPyramidCS.get(), nullptr, 0);
-	for (int mip = 1; mip <= maxMip; ++mip) {
-		SSDMCB cb = {};
-		cb.FullDimX = (float)w;
-		cb.FullDimY = (float)h;
-		cb.RcpFullDimX = 1.0f / w;
-		cb.RcpFullDimY = 1.0f / h;
-		cb.SrcMipLevel = mip - 1;
-		ssdmCB->Update(cb);
-
-		ID3D11ShaderResourceView* srvs[] = { texDisplacement->srv.get() };
-		context->CSSetShaderResources(0, 1, srvs);
-
-		ID3D11UnorderedAccessView* uavs[] = { uavDisplacement[mip].get() };
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-		uint dw = std::max(1u, w >> mip);
-		uint dh = std::max(1u, h >> mip);
-		context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
-
-		ID3D11ShaderResourceView* nullSrv[] = { nullptr };
-		ID3D11UnorderedAccessView* nullUav[] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSrv);
-		context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
-	}
-
-	// Iterative refinement: coarse (maxMip) → fine (0)
-	context->CSSetShader(ssdmDisplaceCS.get(), nullptr, 0);
-	for (int mip = maxMip; mip >= 0; --mip) {
-		SSDMCB cb = {};
-		cb.FullDimX = (float)w;
-		cb.FullDimY = (float)h;
-		cb.RcpFullDimX = 1.0f / w;
-		cb.RcpFullDimY = 1.0f / h;
-		cb.MipLevel = mip;
-		cb.IsCoarsest = (mip == maxMip) ? 1 : 0;
-		ssdmCB->Update(cb);
-
-		ID3D11ShaderResourceView* srvs[2] = {
-			texDisplacement->srv.get(),
-			(mip < maxMip) ? texSSDMLevel[mip + 1]->srv.get() : nullptr
-		};
-		context->CSSetShaderResources(0, 2, srvs);
-
-		ID3D11UnorderedAccessView* uavs[] = { texSSDMLevel[mip]->uav.get() };
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-		uint dw = std::max(1u, w >> mip);
-		uint dh = std::max(1u, h >> mip);
-		context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
-
-		ID3D11ShaderResourceView* nullSrvs[2] = { nullptr, nullptr };
-		ID3D11UnorderedAccessView* nullUav[] = { nullptr };
-		context->CSSetShaderResources(0, 2, nullSrvs);
-		context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
-	}
-
-	// Cleanup
-	context->CSSetShader(nullptr, nullptr, 0);
-	ID3D11Buffer* nullCb[] = { nullptr };
-	context->CSSetConstantBuffers(0, 1, nullCb);
-	ID3D11SamplerState* nullSampler[] = { nullptr };
-	context->CSSetSamplers(0, 1, nullSampler);
+	auto* dst = texSSDMLevel[0]->resource.get();
+	auto* src = texDisplacement->resource.get();
+	// Lighting writes absolute fetch UVs to the displacement RT; composite samples texSSDMLevel[0].
+	globals::d3d::context->CopySubresourceRegion(dst, 0, 0, 0, 0, src, 0, nullptr);
 }

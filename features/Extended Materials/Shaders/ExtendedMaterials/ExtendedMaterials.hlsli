@@ -112,8 +112,14 @@ namespace ExtendedMaterials
 	{
 		float mipLevel = ComputeMipLevelAnisotropicDisplacement(coords, tex);
 		float m = max(floor(mipLevel + 0.5), 0);
-		// SSDM height is not filtered like diffuse: very high mips read as smeared / swimming relief.
-		return min(m, 4);
+		// Stronger global displacement amplifies texel noise / mip seams in the height field → swirls.
+		// Nudge to blurrier mips as the EMAT slider rises (smooth in log space vs default 0.05).
+#	if defined(EMAT)
+		float ds = SharedData::extendedMaterialSettings.DisplacementScale;
+		float mipBoost = floor(max(0.0, log2(max(1e-5, ds) * 20.0)));
+		m += mipBoost;
+#	endif
+		return min(m, 6);
 	}
 
 #if defined(LANDSCAPE)
@@ -330,41 +336,57 @@ namespace ExtendedMaterials
 
 #endif
 
-	// First-order tangent-space parallax mapped through the projection, instead of pushing along
-	// view-space N with a magic constant (that ignored displacementScale and blew up at grazing).
-	// viewDirWorld: camera → surface (`normalize(WorldPosition)`), same as water parallax input.
-	// Do not apply Water.hlsl's parallaxDir.y world flip here — that is for world-xy / flow UV, not tangent Vt.
+	// POM-style tangent step (Vt.xy / Vt.z) then world-space offset and projection — same relief as parallax,
+	// with a slope-aware denominator so grazing views do not explode like 1/|Vt.z|.
+	// Callers pass surface → camera (Lighting `viewDirection`, or `refractedViewDirection` for coated PBR).
+	// The tangent step uses the ray into the surface (camera → surface), i.e. the negated view vector.
 	float2 ComputeDisplacementVector(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
 		float height, float displacementScale, uint eyeIndex)
 	{
-		float h = clamp(height, -0.75, 0.75);
+		float hRaw = clamp(height, -0.75, 0.75);
+		// Soft squash of large |h| (stacked terrain / high material height scale) — reduces spike-driven SSDM noise.
+		// Lighter squash keeps SSDM height closer to the authored map (triplanar / heavy squash read as muddy swirls).
+		float h = hRaw * rcp(1.0 + abs(hRaw) * 0.14);
+
+		float3 Tw = normalize(tbnTr0);
+		float3 Bw = normalize(tbnTr1);
+		float3 Nw = normalize(tbnTr2);
+		float3 Vw = -normalize(viewDirWorld);
 
 		float3 Vt;
-		Vt.x = dot(viewDirWorld, tbnTr0);
-		Vt.y = dot(viewDirWorld, tbnTr1);
-		Vt.z = dot(viewDirWorld, tbnTr2);
+		Vt.x = dot(Vw, Tw);
+		Vt.y = dot(Vw, Bw);
+		Vt.z = dot(Vw, Nw);
 
-		float zn = max(abs(Vt.z), 0.18);
+		// Oblique / relaxed denominator: zn ~ |z| + k*|xy| caps tangent parallax rate at grazing
+		// (pure max(|z|,eps) makes |xy|/eps huge and warps SSDM).
+		float zn = max(abs(Vt.z), 0.02) + 0.58 * length(Vt.xy);
 		float2 parallaxDir = Vt.xy / zn;
 		float pdLen = length(parallaxDir);
-		if (pdLen > 6.0)
-			parallaxDir *= 6.0 / pdLen;
-
-		float3 Tvs = normalize(FrameBuffer::WorldToView(tbnTr0, false, eyeIndex));
-		float3 Bvs = normalize(FrameBuffer::WorldToView(tbnTr1, false, eyeIndex));
+		if (pdLen > 4.5)
+			parallaxDir *= 4.5 / pdLen;
 
 		static const float kLegacyNormalPush = 32.0;
 		static const float kDefaultDisplacementScale = 0.05;
-		// Legacy 32×push was view-N only; tangent→ViewToUV needs much less or gbuffer pulls like radial zoom.
 		static const float kTangentParallaxAmpScale = 0.22;
 		float amp = h * displacementScale * (kLegacyNormalPush / kDefaultDisplacementScale) * kTangentParallaxAmpScale;
-		float3 offsetVS = -(Tvs * parallaxDir.x + Bvs * parallaxDir.y) * amp;
+
+		// World tangent step (POM), then rotate to view and project — matches camera path better than
+		// adding Tvs/Bvs directly in view when TBN is skewed or non-orthonormal.
+		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
+		float3 offsetVS = FrameBuffer::WorldToView(worldOff, false, eyeIndex);
 
 		float2 uv0 = FrameBuffer::ViewToUV(viewPosVS, true, eyeIndex);
 		float2 uv1 = FrameBuffer::ViewToUV(viewPosVS + offsetVS, true, eyeIndex);
 		float2 duv = uv1 - uv0;
 
-		const float maxScreenHop = 0.028;
+		// Tighter screen pull when displacement is cranked — reduces incoherent neighbor blends that read as swirl.
+#	if defined(EMAT)
+		float ds = SharedData::extendedMaterialSettings.DisplacementScale;
+		float maxScreenHop = lerp(0.038, 0.021, saturate((ds - 0.05) * 14.0));
+#	else
+		float maxScreenHop = 0.038;
+#	endif
 		float len = length(duv);
 		if (len > maxScreenHop)
 			duv *= maxScreenHop / len;

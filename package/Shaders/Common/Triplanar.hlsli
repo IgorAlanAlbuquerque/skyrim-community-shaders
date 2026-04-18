@@ -22,6 +22,23 @@ namespace Triplanar
 		       tex.Sample(samp, worldPos.xy * scale) * weights.z;
 	}
 
+	/// Same as Sample but explicit mip (e.g. SSDM height) — smooths projection seams vs single UV.
+	float4 SampleLevel(Texture2D<float4> tex, SamplerState samp, float3 worldPos, float3 weights, float scale, float mipLevel)
+	{
+		float3 p = worldPos * scale;
+		return tex.SampleLevel(samp, p.yz, mipLevel) * weights.x +
+		       tex.SampleLevel(samp, p.xz, mipLevel) * weights.y +
+		       tex.SampleLevel(samp, p.xy, mipLevel) * weights.z;
+	}
+
+	/// Match triplanar UV rate to texture UV rate along the surface (screen-space derivatives).
+	float SurfaceScaleFromWorldUv(float2 texUv, float3 worldPos)
+	{
+		float2 uvSize = max(float2(length(ddx(texUv)), length(ddy(texUv))), 1e-6);
+		float wSize = max(length(ddx(worldPos)), length(ddy(worldPos)));
+		return clamp(uvSize / max(wSize, 1e-6), 0.02, 120.0);
+	}
+
 	/// Compute gradients for stochastic triplanar sampling, pre-computed before branching.
 	void ComputeGradients(float3 worldPos, float scale, out float3 dPdx, out float3 dPdy)
 	{

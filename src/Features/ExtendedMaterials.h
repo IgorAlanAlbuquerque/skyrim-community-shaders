@@ -56,34 +56,14 @@ struct ExtendedMaterials : Feature
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 
-	// SSDM resources
+	// SSDM resources (Lighting RT + copy to texSSDMLevel[0] for deferred composite; no vector pyramid).
 	static constexpr int SSDM_MIP_LEVELS = 4;
-
-	struct alignas(16) SSDMCB
-	{
-		float FullDimX;
-		float FullDimY;
-		float RcpFullDimX;
-		float RcpFullDimY;
-		int MipLevel;
-		int IsCoarsest;
-		int SrcMipLevel;
-		int pad;
-	};
-	STATIC_ASSERT_ALIGNAS_16(SSDMCB);
-
-	eastl::unique_ptr<ConstantBuffer> ssdmCB;
 
 	eastl::unique_ptr<Texture2D> texDisplacement;
 	winrt::com_ptr<ID3D11RenderTargetView> rtvDisplacement;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavDisplacement[SSDM_MIP_LEVELS];
 
 	eastl::unique_ptr<Texture2D> texSSDMLevel[SSDM_MIP_LEVELS];
-
-	winrt::com_ptr<ID3D11ComputeShader> ssdmBuildPyramidCS;
-	winrt::com_ptr<ID3D11ComputeShader> ssdmDisplaceCS;
-
-	winrt::com_ptr<ID3D11SamplerState> ssdmLinearSampler;
 
 	ID3D11ShaderResourceView* GetSSDMOffsetSRV() const;
 	void ClearDisplacementTexture();

@@ -947,8 +947,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
-	// Camera → fragment (matches water `normalize(WPosition)`). Shading uses viewDirection = toward camera.
-	float3 parallaxViewDirWorld = normalize(input.WorldPosition.xyz);
 
 	float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
@@ -1016,6 +1014,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float mipLevel = 0;
 #	endif  // LANDSCAPE
 	float2 ssdmDisplacement = float2(0, 0);
+	bool ssdmActive = false;
 
 #	if defined(EMAT)
 #		if defined(LANDSCAPE)
@@ -1048,11 +1047,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(EMAT)
 #		if defined(PARALLAX) && !defined(TRUE_PBR)
 	if (SharedData::extendedMaterialSettings.EnableParallax) {
-		mipLevel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
 		// Vanilla-style parallax maps store height in alpha (e.g. DXT5); red is not used for relief.
+		// Use mesh UV + implicit mip (Sample) on meshes so height matches forward parallax filtering.
+		// Triplanar + one mip from UV was smearing three mismatched mips and caused swirl at blend zones.
+#			if defined(LANDSCAPE) || defined(LODLANDSCAPE)
+		mipLevel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
 		float height = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).w;
+#			else
+		float height = TexParallaxSampler.Sample(SampParallaxSampler, uv).w;
+#			endif
 		height = ExtendedMaterials::AdjustDisplacementNormalized(height, displacementParams);
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, parallaxViewDirWorld, tbnTr[0], tbnTr[1], tbnTr[2], height - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], height - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmActive = true;
 	}
 #		endif  // PARALLAX && !TRUE_PBR
 
@@ -1077,10 +1083,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (complexMaterial) {
 			if (envMaskSample.w > kMaskEpsilon) {
 				complexMaterialParallax = true;
+#				if defined(LANDSCAPE) || defined(LODLANDSCAPE)
 				mipLevel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexEnvMaskSampler);
 				float cmHeight = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
+#				else
+				float cmHeight = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).w;
+#				endif
 				cmHeight = ExtendedMaterials::AdjustDisplacementNormalized(cmHeight, displacementParams);
-				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, parallaxViewDirWorld, tbnTr[0], tbnTr[1], tbnTr[2], cmHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], cmHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+				ssdmActive = true;
 				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 			} else {
 				complexMaterialColor = envMaskSample;
@@ -1121,20 +1132,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			entryNormal = normalize(mul(tbn, entryNormalTS));
 			refractedViewDirection = -refract(-viewDirection, entryNormal, eta);
 		}
-		float mipPbrRmaos = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexRMAOSSampler);
-		float mipPbrParallax = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
 		float pbrHeight;
 		[branch] if ((PBRFlags & PBR::Flags::PackedDisplacementInRmaosAlpha) != 0)
 		{
-			pbrHeight = TexRMAOSSampler.SampleLevel(SampRMAOSSampler, uv, mipPbrRmaos).a;
+			pbrHeight = TexRMAOSSampler.Sample(SampRMAOSSampler, uv).a;
 		}
 		else
 		{
-			pbrHeight = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipPbrParallax).x;
+			pbrHeight = TexParallaxSampler.Sample(SampParallaxSampler, uv).x;
 		}
 		pbrHeight = ExtendedMaterials::AdjustDisplacementNormalized(pbrHeight, displacementParams);
 		const float pbrRelief = (pbrHeight - 0.5) * PBRParams1.y;
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, parallaxViewDirWorld, tbnTr[0], tbnTr[1], tbnTr[2], pbrRelief, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, refractedViewDirection, tbnTr[0], tbnTr[1], tbnTr[2], pbrRelief, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmActive = true;
 	}
 #			endif  // !FACEGEN
 #		endif      // TRUE_PBR
@@ -1232,7 +1242,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, parallaxViewDirWorld, tbnTr[0], tbnTr[1], tbnTr[2], terrainHeight, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], terrainHeight, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmActive = true;
 	}
 #			if defined(TERRAIN_VARIATION)
 	else if (useTerrainVariation) {
@@ -3097,7 +3108,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
 #		if defined(DEFERRED)
-	psout.SSDMDisplacement = ssdmDisplacement;
+	// Deferred composite expects absolute normalized fetch UV (same basis as ViewToUV + DR + stereo).
+	// Raw duv + mip pyramid + barycentric refine averaged offsets and caused visible swirls.
+	float2 ssdmOut = float2(0, 0);
+	if (ssdmActive)
+		ssdmOut = screenUV + ssdmDisplacement;
+	psout.SSDMDisplacement = ssdmOut;
 #		endif
 
 #		if defined(SNOW)
