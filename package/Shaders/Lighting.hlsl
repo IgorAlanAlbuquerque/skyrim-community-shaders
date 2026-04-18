@@ -1081,7 +1081,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(height, hN, NdotL, ematMeshDispMag, 1.0);
 		}
 #			endif
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], height - 0.5, ematMeshDispMag, eyeIndex, 0.0.xx);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], height - 0.5, ematMeshDispMag, eyeIndex);
 		ssdmActive = true;
 	}
 #		endif  // PARALLAX && !TRUE_PBR
@@ -1125,7 +1125,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(cmHeight, hN, NdotL, ematMeshDispMag, 1.0);
 				}
 #					endif
-				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], cmHeight - 0.5, ematMeshDispMag, eyeIndex, 0.0.xx);
+				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], cmHeight - 0.5, ematMeshDispMag, eyeIndex);
 				ssdmActive = true;
 				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 			} else {
@@ -1196,7 +1196,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(pbrHeight, pbrHN, NdotL, ematMeshDispMag, 1.0);
 		}
 		const float pbrRelief = (pbrHeight - 0.5) * PBRParams1.y;
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, refractedViewDirection, tbnTr[0], tbnTr[1], tbnTr[2], pbrRelief, ematMeshDispMag, eyeIndex, 0.0.xx);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, refractedViewDirection, tbnTr[0], tbnTr[1], tbnTr[2], pbrRelief, ematMeshDispMag, eyeIndex);
 		ssdmActive = true;
 	}
 #			endif  // !FACEGEN
@@ -1282,22 +1282,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float weights[6];
 		weights[0] = weights[1] = weights[2] = weights[3] = weights[4] = weights[5] = 0.0;
-		// Planar terrain UV stretches on cliff sides; used to damp SSDM / relief that would otherwise smear in composite.
-		// Terrain variation hashes/offsets use TexCoord0.zw — use the same derivatives for metrics when tiling fix is on,
-		// so LandscapeSsdmTrust sees the same UV space as terrain variation (avoids swirl); trust still damps SSDM smear.
-		float2 uvDg;
-#			if defined(TERRAIN_VARIATION)
-		bool useTerrainVariationSsdm = SharedData::terrainVariationSettings.enableTilingFix;
-		[branch] if (useTerrainVariationSsdm)
-			uvDg = float2(length(ddx(input.TexCoord0.zw)), length(ddy(input.TexCoord0.zw)));
-		else
-			uvDg = float2(length(ddx(uv)), length(ddy(uv)));
-#			else
-		uvDg = float2(length(ddx(uv)), length(ddy(uv)));
-#			endif
-		float uvDerivMax = max(uvDg.x, uvDg.y);
-		float landscapeUvAniso = max(uvDerivMax, 1e-6) / max(min(uvDg.x, uvDg.y), 1e-6);
-		float2 landscapeUvMetrics = float2(landscapeUvAniso, uvDerivMax);
 #			if defined(TERRAIN_VARIATION)
 		float terrainHeight = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, dx, dy, weights);
 #			else
@@ -1323,7 +1307,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], terrainHeight, ematTerrainDispMag, eyeIndex, landscapeUvMetrics);
+		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], terrainHeight, ematTerrainDispMag, eyeIndex);
 		ssdmActive = true;
 	}
 #			if defined(TERRAIN_VARIATION)

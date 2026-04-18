@@ -111,15 +111,7 @@ namespace ExtendedMaterials
 	float GetMipLevelForDisplacement(float2 coords, Texture2D<float4> tex)
 	{
 		float mipLevel = ComputeMipLevelAnisotropicDisplacement(coords, tex);
-		// EMAT slider must not jump height mips in whole steps — floor(log2(mult)) made peaks slide in UV vs
-		// albedo and SSDM read as texture scrolling when changing displacement intensity.
-#	if defined(EMAT)
-		float ds = max(SharedData::extendedMaterialSettings.DisplacementScale, 0.08);
-		float mipNudge = 0.32 * max(0.0, log2(clamp(ds / 0.05, 1.0, 8.0)));
-		float m = max(floor(mipLevel + 0.5 + mipNudge), 0);
-#	else
 		float m = max(floor(mipLevel + 0.5), 0);
-#	endif
 		return min(m, 6);
 	}
 
@@ -392,51 +384,12 @@ namespace ExtendedMaterials
 		return max(pow(saturate(1.0 - x), kShadowPow), kReliefFloor);
 	}
 
-#	if defined(LANDSCAPE)
-	// Planar landscape UV smears on cliff sides (one axis spans huge world distance). SSDM reprojects in
-	// screen space and then pulls wrong neighbors — damp when the surface is steep vs world up and when
-	// UV screen derivatives are highly anisotropic.
-	// uvMetrics: x = max(ddx,ddy)/min(ddx,ddy), y = max(|ddx|,|ddy|). Meshes pass (0,0).
-	// When y is tiny (distance / coarse footprint), x collapses toward 1 and must not lift trust — blend to
-	// slope-only trust so relief / SSDM do not ramp up incorrectly far from the camera.
-	float LandscapeSsdmTrust(float3 Nw, float2 uvMetrics)
-	{
-		float uvDerivativeAniso = uvMetrics.x;
-		float uvDerivMax = max(uvMetrics.y, 0.0);
-
-		float upA = saturate(abs(normalize(Nw).z));
-		float slopeFade = smoothstep(0.028, 0.46, upA);
-		// Screen UV derivatives shrink with distance → aniso ratio collapses toward 1 and would read as
-		// "unstretched" and lift trust. When |ddx/ddy| is tiny, blend toward a conservative high aniso so
-		// stretchFade does not incorrectly relax relief / SSDM farther from the camera.
-		float derivWeight = saturate(uvDerivMax * 14000.0);
-		float anisoResolved = lerp(max(uvDerivativeAniso, 28.0), uvDerivativeAniso, smoothstep(0.04, 1.0, derivWeight));
-		float stretchFade = 1.0;
-		if (anisoResolved > 3.5)
-			stretchFade = saturate(1.0 - smoothstep(3.5, 88.0, anisoResolved) * 0.94);
-		return saturate(slopeFade * stretchFade);
-	}
-#	endif
-
-	// POM-style tangent step (Vt.xy / Vt.z) then world-space offset and projection — same relief as parallax,
-	// with a slope-aware denominator so grazing views do not explode like 1/|Vt.z|.
+	// POM-style tangent step (Vt.xy / Vt.z) then world-space offset and projection.
 	// Callers pass surface → camera (Lighting `viewDirection`, or `refractedViewDirection` for coated PBR).
-	// The tangent step uses the ray into the surface (camera → surface), i.e. the negated view vector.
-	// landscapeUvMetrics: LANDSCAPE only — float2(aniso, maxDeriv); meshes pass (0,0). Use zw derivatives when TV tiling fix matches stochastic UV.
 	float2 ComputeDisplacementVector(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
-		float height, float displacementScale, uint eyeIndex, float2 landscapeUvMetrics)
+		float height, float displacementScale, uint eyeIndex)
 	{
-		float hRaw = clamp(height, -0.75, 0.75);
-		// Soft squash of large |h| (stacked terrain / high material height scale) — reduces spike-driven SSDM noise.
-		// Lighter squash keeps SSDM height closer to the authored map (triplanar / heavy squash read as muddy swirls).
-#	if defined(LANDSCAPE) && defined(EMAT)
-		// Keep height shape stable vs multiplier; noise is handled by mip nudge + screen hop, not extra squash
-		// that fought amplitude and made the slider feel like UV drift instead of depth.
-		float hSquashK = 0.14 + 0.10 * saturate((max(displacementScale, 1e-5) / 0.05 - 1.0) * 0.45);
-		float h = hRaw * rcp(1.0 + abs(hRaw) * hSquashK);
-#	else
-		float h = hRaw * rcp(1.0 + abs(hRaw) * 0.14);
-#	endif
+		float h = clamp(height, -0.75, 0.75);
 
 		float3 Tw = normalize(tbnTr0);
 		float3 Bw = normalize(tbnTr1);
@@ -448,53 +401,19 @@ namespace ExtendedMaterials
 		Vt.y = dot(Vw, Bw);
 		Vt.z = dot(Vw, Nw);
 
-		// Oblique / relaxed denominator: zn ~ |z| + k*|xy| caps tangent parallax rate at grazing
-		// (pure max(|z|,eps) makes |xy|/eps huge and warps SSDM).
-		float zn = max(abs(Vt.z), 0.02) + 0.58 * length(Vt.xy);
+		float zn = max(abs(Vt.z), 1e-5);
 		float2 parallaxDir = Vt.xy / zn;
-		float pdLen = length(parallaxDir);
-		if (pdLen > 4.5)
-			parallaxDir *= 4.5 / pdLen;
 
 		static const float kLegacyNormalPush = 32.0;
 		static const float kDefaultDisplacementScale = 0.05;
 		static const float kTangentParallaxAmpScale = 0.22;
 		float amp = h * displacementScale * (kLegacyNormalPush / kDefaultDisplacementScale) * kTangentParallaxAmpScale;
 
-#	if defined(LANDSCAPE)
-		float trust = LandscapeSsdmTrust(Nw, landscapeUvMetrics);
-		amp *= trust;
-#	endif
-
-		// World tangent step (POM), then rotate to view and project — matches camera path better than
-		// adding Tvs/Bvs directly in view when TBN is skewed or non-orthonormal.
 		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
 		float3 offsetVS = FrameBuffer::WorldToView(worldOff, false, eyeIndex);
 
 		float2 uv0 = FrameBuffer::ViewToUV(viewPosVS, true, eyeIndex);
 		float2 uv1 = FrameBuffer::ViewToUV(viewPosVS + offsetVS, true, eyeIndex);
-		float2 duv = uv1 - uv0;
-
-		// Tighter screen pull when displacement is cranked — reduces incoherent neighbor blends that read as swirl.
-#	if defined(EMAT)
-		// `displacementScale` argument is effective authored magnitude (see Lighting kEmatAuthoredDispRef path).
-		float ds = max(displacementScale, 1e-5);
-		float maxScreenHop = lerp(0.038, 0.021, saturate((ds - 0.05) * 14.0));
-#	else
-		float maxScreenHop = 0.038;
-#	endif
-#	if defined(LANDSCAPE)
-#		if defined(EMAT)
-		// Landscape SSDM reprojects deferred albedo from shifted pixels; extra cap vs multiplier avoids vertical streaking.
-		float dsNorm = ds / 0.05;
-		maxScreenHop *= rcp(1.0 + 0.62 * max(0.0, dsNorm - 1.0));
-#		endif
-		maxScreenHop *= lerp(0.40, 1.0, trust);
-#	endif
-		float len = length(duv);
-		if (len > maxScreenHop)
-			duv *= maxScreenHop / len;
-
-		return duv;
+		return uv1 - uv0;
 	}
 }
