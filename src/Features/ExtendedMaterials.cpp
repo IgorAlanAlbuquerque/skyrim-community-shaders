@@ -1,7 +1,10 @@
 #include "ExtendedMaterials.h"
 
+#include <algorithm>
+
 #include "Deferred.h"
 #include "State.h"
+#include "Utils/D3D.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ExtendedMaterials::Settings,
@@ -202,11 +205,16 @@ void ExtendedMaterials::SetupResources()
 			.Texture2D = { .MipSlice = 0 } });
 	}
 
+	cbufSSDMBuild = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc(sizeof(SSDMBuildPyramidCB), false));
+	cbufSSDMSolve = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc(sizeof(SSDMSolveCB), false));
+
 	ClearShaderCache();
 }
 
 void ExtendedMaterials::ClearShaderCache()
 {
+	ssdmBuildPyramidCS = nullptr;
+	ssdmSolveCS = nullptr;
 }
 
 void ExtendedMaterials::RegisterDisplacementRT()
@@ -233,18 +241,112 @@ void ExtendedMaterials::ClearDisplacementTexture()
 	globals::d3d::context->ClearRenderTargetView(rtvDisplacement.get(), clearColor);
 }
 
+void ExtendedMaterials::CompileSSDMComputeShadersIfNeeded()
+{
+	if (ssdmBuildPyramidCS && ssdmSolveCS)
+		return;
+
+	// Drop any partial state from a previous failed load so we never run solve with stale coarser mips.
+	ssdmBuildPyramidCS = nullptr;
+	ssdmSolveCS = nullptr;
+
+	const std::vector<std::pair<const char*, const char*>> defines{};
+	winrt::com_ptr<ID3D11ComputeShader> pyramid;
+	winrt::com_ptr<ID3D11ComputeShader> solve;
+
+	if (auto* raw = Util::CompileShader(L"Data\\Shaders\\ExtendedMaterials\\SSDMBuildPyramidCS.hlsl", defines, "cs_5_0")) {
+		pyramid.attach(reinterpret_cast<ID3D11ComputeShader*>(raw));
+		Util::SetResourceName(pyramid.get(), "SSDMBuildPyramidCS");
+	} else {
+		logger::error("[ExtendedMaterials] Failed to compile SSDMBuildPyramidCS.hlsl");
+	}
+	if (auto* raw = Util::CompileShader(L"Data\\Shaders\\ExtendedMaterials\\SSDMSolveCS.hlsl", defines, "cs_5_0")) {
+		solve.attach(reinterpret_cast<ID3D11ComputeShader*>(raw));
+		Util::SetResourceName(solve.get(), "SSDMSolveCS");
+	} else {
+		logger::error("[ExtendedMaterials] Failed to compile SSDMSolveCS.hlsl");
+	}
+
+	if (pyramid && solve) {
+		ssdmBuildPyramidCS = std::move(pyramid);
+		ssdmSolveCS = std::move(solve);
+	}
+}
+
 void ExtendedMaterials::DrawSSDM()
 {
 	if (!settings.EnableParallax)
 		return;
-	if (!texDisplacement || !texSSDMLevel[0])
+	if (!texDisplacement || !texSSDMLevel[0] || !cbufSSDMBuild || !cbufSSDMSolve)
+		return;
+
+	CompileSSDMComputeShadersIfNeeded();
+	if (!ssdmBuildPyramidCS || !ssdmSolveCS)
 		return;
 
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "SSDM");
 
-	auto* dst = texSSDMLevel[0]->resource.get();
-	auto* src = texDisplacement->resource.get();
-	// Lighting writes absolute fetch UVs to the displacement RT; composite samples texSSDMLevel[0].
-	globals::d3d::context->CopySubresourceRegion(dst, 0, 0, 0, 0, src, 0, nullptr);
+	auto context = globals::d3d::context;
+	auto* deferred = Deferred::GetSingleton();
+	if (!deferred || !deferred->linearSampler)
+		return;
+
+	const UINT fullW = texDisplacement->desc.Width;
+	const UINT fullH = texDisplacement->desc.Height;
+
+	ID3D11ShaderResourceView* duvSRV = texDisplacement->srv.get();
+
+	for (int dstMip = 1; dstMip < SSDM_MIP_LEVELS; ++dstMip) {
+		SSDMBuildPyramidCB buildData{};
+		buildData.srcMip = dstMip - 1;
+		cbufSSDMBuild->Update(buildData);
+		ID3D11Buffer* cb = cbufSSDMBuild->CB();
+		context->CSSetConstantBuffers(0, 1, &cb);
+		context->CSSetShaderResources(0, 1, &duvSRV);
+		ID3D11UnorderedAccessView* dstUav = uavDisplacement[dstMip].get();
+		context->CSSetUnorderedAccessViews(0, 1, &dstUav, nullptr);
+		context->CSSetShader(ssdmBuildPyramidCS.get(), nullptr, 0);
+		const UINT mw = std::max(1u, fullW >> dstMip);
+		const UINT mh = std::max(1u, fullH >> dstMip);
+		context->Dispatch((mw + 7u) / 8u, (mh + 7u) / 8u, 1);
+	}
+
+	ID3D11ShaderResourceView* nullSrv = nullptr;
+	ID3D11UnorderedAccessView* nullUav = nullptr;
+	context->CSSetShaderResources(0, 1, &nullSrv);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+
+	SSDMSolveCB solveData{};
+	solveData.fullWidth = static_cast<float>(fullW);
+	solveData.fullHeight = static_cast<float>(fullH);
+	solveData.rcpFullWidth = fullW ? 1.0f / static_cast<float>(fullW) : 0.0f;
+	solveData.rcpFullHeight = fullH ? 1.0f / static_cast<float>(fullH) : 0.0f;
+	solveData.numMips = SSDM_MIP_LEVELS;
+	solveData.numIters = 4;
+	solveData.maxStepUv = 0.02f;
+	solveData.damping = 0.72f;
+	cbufSSDMSolve->Update(solveData);
+	ID3D11Buffer* cbSolve = cbufSSDMSolve->CB();
+	context->CSSetConstantBuffers(0, 1, &cbSolve);
+	context->CSSetShaderResources(0, 1, &duvSRV);
+	context->CSSetSamplers(0, 1, &deferred->linearSampler);
+	ID3D11UnorderedAccessView* outUav = texSSDMLevel[0]->uav.get();
+	context->CSSetUnorderedAccessViews(0, 1, &outUav, nullptr);
+	context->CSSetShader(ssdmSolveCS.get(), nullptr, 0);
+	context->Dispatch((fullW + 7u) / 8u, (fullH + 7u) / 8u, 1);
+
+	context->CSSetShader(nullptr, nullptr, 0);
+	context->CSSetShaderResources(0, 1, &nullSrv);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+	ID3D11SamplerState* nullSamp = nullptr;
+	context->CSSetSamplers(0, 1, &nullSamp);
+	ID3D11Buffer* nullCb = nullptr;
+	context->CSSetConstantBuffers(0, 1, &nullCb);
+
+	for (int i = 1; i < SSDM_MIP_LEVELS; ++i) {
+		const UINT sub = D3D11CalcSubresource(static_cast<UINT>(i), 0, static_cast<UINT>(SSDM_MIP_LEVELS));
+		context->CopySubresourceRegion(texSSDMLevel[i]->resource.get(), 0, 0, 0, 0,
+			texDisplacement->resource.get(), sub, nullptr);
+	}
 }

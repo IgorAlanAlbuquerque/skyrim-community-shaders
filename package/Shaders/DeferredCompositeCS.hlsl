@@ -117,15 +117,12 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	uint2 gbufferCoord = dispatchID.xy;
 #if defined(SSDM)
 	{
+		// Absolute fetch UV (solve pass). Inactive pixels resolve to ~stereo UV so this is identity without a special sentinel.
 		float2 sourceUV = SSDMOffsetTexture[dispatchID.xy];
-		// Absolute fetch UV in full-buffer normalized space (same basis as ViewToUV after DR + stereo).
-		// Lighting writes screenUV + duv; DrawSSDM copies into this texture (no vector pyramid refine).
 		// Do not use SharedData::ConvertUVToSampleCoord — that path expects per-eye mono UV (then
 		// stereo-packs + DR-adjusts) like depth reads from ViewToUV; applying it here double-packs
 		// VR and skews flat/DR, which reads the wrong gbuffer columns (split / ghost image).
-		if (any(sourceUV != 0)) {
-			gbufferCoord = uint2(clamp(sourceUV.xy * SharedData::BufferDim.xy, float2(0, 0), SharedData::BufferDim.xy - 1.0));
-		}
+		gbufferCoord = uint2(clamp(sourceUV.xy * SharedData::BufferDim.xy, float2(0, 0), SharedData::BufferDim.xy - 1.0));
 	}
 #endif
 

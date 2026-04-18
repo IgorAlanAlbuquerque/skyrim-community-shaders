@@ -3178,11 +3178,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
 #		if defined(DEFERRED)
-	// Deferred composite expects absolute normalized fetch UV (same basis as ViewToUV + DR + stereo).
-	// Raw duv + mip pyramid + barycentric refine averaged offsets and caused visible swirls.
+	// Deferred composite samples absolute UV from texSSDMLevel[0] after compute solve.
+	// Lighting stores per-pixel duv; ExtendedMaterials builds a duv mip pyramid + Picard refine → absolute fetch UV.
 	float2 ssdmOut = float2(0, 0);
 	if (ssdmActive)
-		ssdmOut = screenUV + ssdmDisplacement;
+		ssdmOut = ssdmDisplacement;
 	psout.SSDMDisplacement = ssdmOut;
 #		endif
 

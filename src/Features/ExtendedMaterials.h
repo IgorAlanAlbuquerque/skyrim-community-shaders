@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "Buffer.h"
 
 struct ExtendedMaterials : Feature
@@ -57,7 +59,7 @@ struct ExtendedMaterials : Feature
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 
-	// SSDM resources (Lighting RT + copy to texSSDMLevel[0] for deferred composite; no vector pyramid).
+	// SSDM: lighting writes duv to texDisplacement mip0; compute builds duv mips + Picard solve → absolute UV in texSSDMLevel[0].
 	static constexpr int SSDM_MIP_LEVELS = 4;
 
 	eastl::unique_ptr<Texture2D> texDisplacement;
@@ -68,4 +70,32 @@ struct ExtendedMaterials : Feature
 
 	ID3D11ShaderResourceView* GetSSDMOffsetSRV() const;
 	void ClearDisplacementTexture();
+
+private:
+	void CompileSSDMComputeShadersIfNeeded();
+
+	struct alignas(16) SSDMBuildPyramidCB {
+		std::int32_t srcMip;
+		std::int32_t pad[3];
+	};
+	STATIC_ASSERT_ALIGNAS_16(SSDMBuildPyramidCB);
+
+	struct alignas(16) SSDMSolveCB {
+		float fullWidth;
+		float fullHeight;
+		float rcpFullWidth;
+		float rcpFullHeight;
+		std::int32_t numMips;
+		std::int32_t numIters;
+		float maxStepUv;
+		float damping;
+	};
+	STATIC_ASSERT_ALIGNAS_16(SSDMSolveCB);
+	static_assert(sizeof(SSDMBuildPyramidCB) == 16);
+	static_assert(sizeof(SSDMSolveCB) == 32);
+
+	winrt::com_ptr<ID3D11ComputeShader> ssdmBuildPyramidCS;
+	winrt::com_ptr<ID3D11ComputeShader> ssdmSolveCS;
+	eastl::unique_ptr<ConstantBuffer> cbufSSDMBuild;
+	eastl::unique_ptr<ConstantBuffer> cbufSSDMSolve;
 };
