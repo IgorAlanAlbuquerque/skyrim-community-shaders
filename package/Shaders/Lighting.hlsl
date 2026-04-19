@@ -1052,7 +1052,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	static const float kEmatAuthoredDispRef = 0.05;
 	float ematDispMult = max(SharedData::extendedMaterialSettings.DisplacementScale, 0.01);
 #		if !defined(TRUE_PBR)
-	float ematMeshDispMag = kEmatAuthoredDispRef * ematDispMult * max(ParallaxOccData.x, 0.12);
+	float ematMeshDispMag = kEmatAuthoredDispRef * ematDispMult * max(ParallaxOccData.x, 1e-4);
 #		elif !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	float ematMeshDispMag = kEmatAuthoredDispRef * ematDispMult;
 #		endif

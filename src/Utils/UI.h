@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cfloat>  // For FLT_MAX
+#include <cstdint>
 #include <cstdio>
 #include <functional>
 #include <imgui.h>
@@ -20,14 +21,16 @@ class Menu;
 class Feature;
 
 // Helper macro for displaying texture buffers in ImGui with resolution info
-#define BUFFER_VIEWER_NODE_IMPL(a_value, a_label, a_scale)                                                       \
-	if (a_value && a_value->srv.get()) {                                                                         \
-		char buf[128];                                                                                           \
-		snprintf(buf, sizeof(buf), "%s (%ux%u)", a_label, a_value->desc.Width, a_value->desc.Height);            \
-		if (ImGui::TreeNode(buf)) {                                                                              \
-			ImGui::Image(a_value->srv.get(), { a_value->desc.Width * a_scale, a_value->desc.Height * a_scale }); \
-			ImGui::TreePop();                                                                                    \
-		}                                                                                                        \
+#define BUFFER_VIEWER_NODE_IMPL(a_value, a_label, a_scale)                                                                                 \
+	if (a_value && a_value->srv.get()) {                                                                                                   \
+		char buf[128];                                                                                                                     \
+		snprintf(buf, sizeof(buf), "%s (%ux%u)", a_label, a_value->desc.Width, a_value->desc.Height);                                        \
+		if (ImGui::TreeNode(buf)) {                                                                                                         \
+			const ImVec2 _bv_size{ (a_value->desc.Width)* (a_scale), (a_value->desc.Height)* (a_scale) };                                   \
+			const ImTextureRef _bv_tex{ static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(a_value->srv.get())) };                  \
+			ImGui::Image(_bv_tex, _bv_size);                                                                                                \
+			ImGui::TreePop();                                                                                                                \
+		}                                                                                                                                    \
 	}
 
 #define BUFFER_VIEWER_NODE(a_value, a_scale) \
@@ -36,9 +39,11 @@ class Feature;
 #define BUFFER_VIEWER_NODE_TITLE(a_value, a_title, a_scale) \
 	BUFFER_VIEWER_NODE_IMPL(a_value, a_title, a_scale)
 
-#define BUFFER_VIEWER_NODE_BULLET(a_value, a_scale) \
-	ImGui::BulletText(#a_value);                    \
-	ImGui::Image(a_value->srv.get(), { a_value->desc.Width * a_scale, a_value->desc.Height * a_scale });
+#define BUFFER_VIEWER_NODE_BULLET(a_value, a_scale)                                                                                      \
+	ImGui::BulletText(#a_value);                                                                                                         \
+	ImGui::Image(                                                                                                                        \
+		ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(a_value->srv.get()))),                                    \
+		{ a_value->desc.Width* a_scale, a_value->desc.Height* a_scale });
 
 #define ADDRESS_NODE(a_value)                                                                        \
 	if (ImGui::Button(#a_value)) {                                                                   \

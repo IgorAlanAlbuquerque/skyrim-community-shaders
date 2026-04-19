@@ -27,7 +27,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
 	float2 t = uv + DuvPyramid.SampleLevel(LinearSampler, uv, coarseMip).xy;
 	t = saturate(t);
 
-	int iters = min(max(NumIters, 1), 8);
+	int iters = min(max(NumIters, 1), 16);
 	[loop]
 	for (int i = 0; i < iters; ++i) {
 		float2 d = DuvPyramid.SampleLevel(LinearSampler, t, 0).xy;

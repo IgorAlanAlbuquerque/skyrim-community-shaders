@@ -1,6 +1,8 @@
 #include "ExtendedMaterials.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <imgui.h>
 
 #include "Deferred.h"
 #include "State.h"
@@ -83,15 +85,24 @@ void ExtendedMaterials::DrawSettings()
 	if (ImGui::TreeNode("Buffer Viewer")) {
 		static float debugRescale = .3f;
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::TextWrapped(
+			"Displacement and SSDM level targets are RGBA32F; RG are often tiny signed values, so previews can look black or flat even when data is present. "
+			"Use the numeric thresholds above or an external capture tool if you need exact duv magnitudes.");
 
-		BUFFER_VIEWER_NODE_TITLE(texDisplacement, "Displacement", debugRescale);
+		if (!texDisplacement || !texDisplacement->srv.get()) {
+			ImGui::BulletText("Displacement RT not allocated yet (load into the game world after enabling the feature).");
+		} else {
+			BUFFER_VIEWER_NODE_TITLE(texDisplacement, "Displacement (RG = duv)", debugRescale);
+		}
 
 		for (int i = 0; i < SSDM_MIP_LEVELS; ++i) {
 			if (texSSDMLevel[i] && texSSDMLevel[i]->srv.get()) {
 				char buf[128];
 				snprintf(buf, sizeof(buf), "SSDM Level %d (%ux%u)", i, texSSDMLevel[i]->desc.Width, texSSDMLevel[i]->desc.Height);
 				if (ImGui::TreeNode(buf)) {
-					ImGui::Image(texSSDMLevel[i]->srv.get(), { texSSDMLevel[i]->desc.Width * debugRescale, texSSDMLevel[i]->desc.Height * debugRescale });
+					ImGui::Image(
+						ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(texSSDMLevel[i]->srv.get()))),
+						{ texSSDMLevel[i]->desc.Width * debugRescale, texSSDMLevel[i]->desc.Height * debugRescale });
 					ImGui::TreePop();
 				}
 			}
@@ -243,33 +254,33 @@ void ExtendedMaterials::ClearDisplacementTexture()
 
 void ExtendedMaterials::CompileSSDMComputeShadersIfNeeded()
 {
-	if (ssdmBuildPyramidCS && ssdmSolveCS)
-		return;
-
-	// Drop any partial state from a previous failed load so we never run solve with stale coarser mips.
-	ssdmBuildPyramidCS = nullptr;
-	ssdmSolveCS = nullptr;
-
 	const std::vector<std::pair<const char*, const char*>> defines{};
-	winrt::com_ptr<ID3D11ComputeShader> pyramid;
-	winrt::com_ptr<ID3D11ComputeShader> solve;
 
-	if (auto* raw = Util::CompileShader(L"Data\\Shaders\\ExtendedMaterials\\SSDMBuildPyramidCS.hlsl", defines, "cs_5_0")) {
-		pyramid.attach(reinterpret_cast<ID3D11ComputeShader*>(raw));
-		Util::SetResourceName(pyramid.get(), "SSDMBuildPyramidCS");
-	} else {
-		logger::error("[ExtendedMaterials] Failed to compile SSDMBuildPyramidCS.hlsl");
-	}
-	if (auto* raw = Util::CompileShader(L"Data\\Shaders\\ExtendedMaterials\\SSDMSolveCS.hlsl", defines, "cs_5_0")) {
-		solve.attach(reinterpret_cast<ID3D11ComputeShader*>(raw));
-		Util::SetResourceName(solve.get(), "SSDMSolveCS");
-	} else {
-		logger::error("[ExtendedMaterials] Failed to compile SSDMSolveCS.hlsl");
-	}
+	if (!ssdmBuildPyramidCS || !ssdmSolveCS) {
+		// Drop any partial state from a previous failed load so we never run solve with stale coarser mips.
+		ssdmBuildPyramidCS = nullptr;
+		ssdmSolveCS = nullptr;
 
-	if (pyramid && solve) {
-		ssdmBuildPyramidCS = std::move(pyramid);
-		ssdmSolveCS = std::move(solve);
+		winrt::com_ptr<ID3D11ComputeShader> pyramid;
+		winrt::com_ptr<ID3D11ComputeShader> solve;
+
+		if (auto* raw = Util::CompileShader(L"Data\\Shaders\\ExtendedMaterials\\SSDMBuildPyramidCS.hlsl", defines, "cs_5_0")) {
+			pyramid.attach(reinterpret_cast<ID3D11ComputeShader*>(raw));
+			Util::SetResourceName(pyramid.get(), "SSDMBuildPyramidCS");
+		} else {
+			logger::error("[ExtendedMaterials] Failed to compile SSDMBuildPyramidCS.hlsl");
+		}
+		if (auto* raw = Util::CompileShader(L"Data\\Shaders\\ExtendedMaterials\\SSDMSolveCS.hlsl", defines, "cs_5_0")) {
+			solve.attach(reinterpret_cast<ID3D11ComputeShader*>(raw));
+			Util::SetResourceName(solve.get(), "SSDMSolveCS");
+		} else {
+			logger::error("[ExtendedMaterials] Failed to compile SSDMSolveCS.hlsl");
+		}
+
+		if (pyramid && solve) {
+			ssdmBuildPyramidCS = std::move(pyramid);
+			ssdmSolveCS = std::move(solve);
+		}
 	}
 }
 
@@ -323,9 +334,9 @@ void ExtendedMaterials::DrawSSDM()
 	solveData.rcpFullWidth = fullW ? 1.0f / static_cast<float>(fullW) : 0.0f;
 	solveData.rcpFullHeight = fullH ? 1.0f / static_cast<float>(fullH) : 0.0f;
 	solveData.numMips = SSDM_MIP_LEVELS;
-	solveData.numIters = 4;
-	solveData.maxStepUv = 0.02f;
-	solveData.damping = 0.72f;
+	solveData.numIters = 8;
+	solveData.maxStepUv = 0.35f;
+	solveData.damping = 0.62f;
 	cbufSSDMSolve->Update(solveData);
 	ID3D11Buffer* cbSolve = cbufSSDMSolve->CB();
 	context->CSSetConstantBuffers(0, 1, &cbSolve);

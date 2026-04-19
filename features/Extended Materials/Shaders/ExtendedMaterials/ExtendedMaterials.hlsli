@@ -345,12 +345,51 @@ namespace ExtendedMaterials
 
 #endif
 
-	// POM-style tangent step (Vt.xy / Vt.z) then world-space offset and projection.
+	// Shorten view-space offset along the same ray so [p, p+o] stays in a valid homogeneous clip band, then
+	// duv = ViewToUV(p+o') - ViewToUV(p). Fixes perspective divide foldover (mirror pixels) without arbitrary |duv| caps.
+	float3 ClipViewOffsetForValidProjection(float3 viewPosVS, float3 offsetVS, uint eyeIndex, out float2 duv)
+	{
+		row_major float4x4 P = FrameBuffer::CameraProj[eyeIndex];
+		float4 h0 = mul(P, float4(viewPosVS, 1.0));
+		float4 dh = mul(P, float4(offsetVS, 0.0));
+		float w0 = h0.w;
+		float dw = dh.w;
+		float wMin = max(5e-5, 1e-4 * abs(w0));
+
+		float tMax = 1.0;
+		if (w0 < wMin) {
+			tMax = 0.0;
+		} else {
+			float w1 = w0 + dw;
+			if (w1 < wMin) {
+				if (dw < -1e-12) {
+					tMax = saturate((wMin - w0) / dw);
+					tMax *= 0.9995;
+				} else {
+					tMax = 0.0;
+				}
+			}
+		}
+
+		float3 o = offsetVS * tMax;
+		duv = FrameBuffer::ViewToUV(viewPosVS + o, true, eyeIndex) - FrameBuffer::ViewToUV(viewPosVS, true, eyeIndex);
+		return o;
+	}
+
+	// POM-style tangent step then world-space offset and projection.
 	// Callers pass surface → camera (Lighting `viewDirection`, or `refractedViewDirection` for coated PBR).
+	//
+	// Offset limiting (Welsh 2004, “Parallax Mapping with Offset Limiting”): at grazing views, Vt.xy/Vt.z
+	// blows up; we blend toward a softer denominator cap (same idea as limiting max parallax offset).
+	// Reference course code (tangent-space camera vector, no z divide in offset): see
+	// https://github.com/marcusstenbeck/tncg14-parallax-mapping/blob/master/parallaxmapping.frag
+	//
+	// Horizon / grazing recess (after Amose05, CC0 “SPOM” Godot shader — amplitude trim vs |N·V|, not mesh discard):
+	// https://godotshaders.com/shader/spom-with-horizon-detection-self-shading-silhouette-clipping-parallax-occlusion-mapping-self-shading-horizon-trimming-erosion/
 	void ComputeDisplacementDuvAndOffsetVS(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
 		float height, float displacementScale, uint eyeIndex, out float2 duv, out float3 offsetVS)
 	{
-		float h = clamp(height, -0.75, 0.75);
+		float h = height;
 
 		float3 Tw = normalize(tbnTr0);
 		float3 Bw = normalize(tbnTr1);
@@ -362,20 +401,34 @@ namespace ExtendedMaterials
 		Vt.y = dot(Vw, Bw);
 		Vt.z = dot(Vw, Nw);
 
-		float zn = max(abs(Vt.z), 1e-5);
-		float2 parallaxDir = Vt.xy / zn;
+		// Magnitude of tangent Z at grazing angles (legacy SSDM / Skyrim tuning). A signed 1/Vt.z denominator
+		// flips parallaxDir whenever Vt.z < 0 and inverts relief (rocks appear pushed into the mesh / terrain).
+		float znHard = max(abs(Vt.z), 1e-5);
+		float znSoft = max(abs(Vt.z), 0.14);
+		float2 parallaxDirHard = Vt.xy / znHard;
+		float2 parallaxDirSoft = Vt.xy / znSoft;
+		float vn = length(Vt);
+		float3 Vtn = vn > 1e-8 ? (Vt / vn) : float3(0, 0, 1);
+		float grazing = saturate(1.0 - abs(Vtn.z));
+		float limBlend = smoothstep(0.22, 0.94, grazing);
+		float2 parallaxDir = lerp(parallaxDirHard, parallaxDirSoft, limBlend);
 
 		static const float kLegacyNormalPush = 32.0;
 		static const float kDefaultDisplacementScale = 0.05;
 		static const float kTangentParallaxAmpScale = 0.22;
 		float amp = h * displacementScale * (kLegacyNormalPush / kDefaultDisplacementScale) * kTangentParallaxAmpScale;
 
-		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
-		offsetVS = FrameBuffer::WorldToView(worldOff, false, eyeIndex);
+		// Recess relief when |N·V| in tangent frame is small (horizon trimming analogue).
+		static const float kHorizonSafe = 0.28;
+		static const float kHorizonPower = 2.0;
+		static const float kHorizonMinMul = 0.38;
+		float tHor = saturate(1.0 - abs(Vtn.z) / max(kHorizonSafe, 1e-4));
+		float horizonMul = lerp(1.0, kHorizonMinMul, pow(tHor, kHorizonPower));
+		amp *= horizonMul;
 
-		float2 uv0 = FrameBuffer::ViewToUV(viewPosVS, true, eyeIndex);
-		float2 uv1 = FrameBuffer::ViewToUV(viewPosVS + offsetVS, true, eyeIndex);
-		duv = uv1 - uv0;
+		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
+		float3 offsetFull = FrameBuffer::WorldToView(worldOff, false, eyeIndex);
+		offsetVS = ClipViewOffsetForValidProjection(viewPosVS, offsetFull, eyeIndex, duv);
 	}
 
 	float2 ComputeDisplacementVector(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
