@@ -3130,13 +3130,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
 #		if defined(DEFERRED)
-	// RG: duv for SSDM pyramid + solve; BA unused (solve outputs absolute UV to texSSDMLevel[0] for composite).
+	// RG: duv for SSDM pyramid + solve; B: 1 if this pixel evaluated SSDM (coverage), A unused. Cleared to 0 before the pass.
 	float4 ssdmPack = float4(0, 0, 0, 0);
 #			if defined(EMAT)
 	if (ssdmActive) {
 		float2 duv = ExtendedMaterials::ComputeDisplacementVector(
 			viewPosition, ssdmViewDir, tbnTr[0], tbnTr[1], tbnTr[2], ssdmHeight, ssdmDispScale, eyeIndex);
-		ssdmPack = float4(duv, 0, 0);
+		ssdmPack = float4(duv, 1.0, 0.0);
 	}
 #			endif
 	psout.SSDMDisplacement = ssdmPack;

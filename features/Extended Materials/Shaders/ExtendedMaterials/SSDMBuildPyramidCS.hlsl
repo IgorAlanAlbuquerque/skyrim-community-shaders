@@ -17,6 +17,8 @@ void main(uint3 dtid : SV_DispatchThreadID)
 	float4 v10 = SrcDuv.Load(int3(base + int2(1, 0), 0));
 	float4 v01 = SrcDuv.Load(int3(base + int2(0, 1), 0));
 	float4 v11 = SrcDuv.Load(int3(base + int2(1, 1), 0));
+	// Average duv; propagate SSDM coverage (B) as max so coarse mips know any child had displacement shading.
 	float2 duvAvg = (v00.xy + v10.xy + v01.xy + v11.xy) * 0.25;
-	DstDuv[dtid.xy] = float4(duvAvg, v00.zw);
+	float cov = max(max(v00.z, v10.z), max(v01.z, v11.z));
+	DstDuv[dtid.xy] = float4(duvAvg, cov, 0.0);
 }

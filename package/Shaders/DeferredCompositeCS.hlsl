@@ -25,7 +25,7 @@ Texture2D<uint> StereoOptModeTexture : register(t16);
 #endif
 
 #if defined(SSDM)
-Texture2D<float2> SSDMOffsetTexture : register(t17);
+Texture2D<float4> SSDMOffsetTexture : register(t17);
 Texture2D<float4> MainCopyTexture : register(t18);
 #endif
 
@@ -122,12 +122,16 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	uint2 gbufferCoord = dispatchID.xy;
 #if defined(SSDM)
 	{
-		// Absolute fetch UV from SSDM solve (texSSDMLevel[0]). Inactive pixels use ~stereo UV; treat as no remap.
-		float2 sourceUV = SSDMOffsetTexture[dispatchID.xy];
+		// Absolute fetch UV from SSDM solve (texSSDMLevel[0]). Z: Picard never needed [0,1] clamp.
+		// W: forward-pass SSDM coverage (not "UV != 0") so flat duv=0 and cleared sky/background remap correctly.
+		float4 ssdmSample = SSDMOffsetTexture[dispatchID.xy];
+		float2 sourceUV = ssdmSample.xy;
+		float ssdmValid = ssdmSample.z;
+		float ssdmCoverage = ssdmSample.w;
 		// Do not use SharedData::ConvertUVToSampleCoord — that path expects per-eye mono UV (then
 		// stereo-packs + DR-adjusts) like depth reads from ViewToUV; applying it here double-packs
 		// VR and skews flat/DR, which reads the wrong gbuffer columns (split / ghost image).
-		if (any(sourceUV != 0)) {
+		if (ssdmValid > 0.5 && ssdmCoverage > 0.5) {
 			gbufferCoord = uint2(clamp(sourceUV.xy * SharedData::BufferDim.xy, float2(0, 0), SharedData::BufferDim.xy - 1.0));
 		}
 	}
