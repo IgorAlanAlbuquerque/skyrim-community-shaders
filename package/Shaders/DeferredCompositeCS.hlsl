@@ -122,16 +122,20 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	uint2 gbufferCoord = dispatchID.xy;
 #if defined(SSDM)
 	{
-		// Absolute fetch UV from SSDM solve (texSSDMLevel[0]). Z: Picard never needed [0,1] clamp.
-		// W: forward-pass SSDM coverage (not "UV != 0") so flat duv=0 and cleared sky/background remap correctly.
+		// Depth gate rejects sky; UV inset + hop bound reduce edge garbage. (Depth/normal cross-tests were too strict in practice.)
+		static const float kSSDMCompUvInset = 0.0015;
+		static const float kSSDMMaxRemapUvDist = 0.36;
 		float4 ssdmSample = SSDMOffsetTexture[dispatchID.xy];
 		float2 sourceUV = ssdmSample.xy;
 		float ssdmValid = ssdmSample.z;
 		float ssdmCoverage = ssdmSample.w;
+		bool uvStrictInterior = all(sourceUV > kSSDMCompUvInset.xx && sourceUV < (1.0 - kSSDMCompUvInset).xx);
+		float2 remapDelta = sourceUV - uv;
+		bool remapBounded = dot(remapDelta, remapDelta) < kSSDMMaxRemapUvDist * kSSDMMaxRemapUvDist;
 		// Do not use SharedData::ConvertUVToSampleCoord — that path expects per-eye mono UV (then
 		// stereo-packs + DR-adjusts) like depth reads from ViewToUV; applying it here double-packs
 		// VR and skews flat/DR, which reads the wrong gbuffer columns (split / ghost image).
-		if (ssdmValid > 0.5 && ssdmCoverage > 0.5) {
+		if (depth < 1.0 && ssdmValid > 0.5 && ssdmCoverage > 0.5 && uvStrictInterior && remapBounded) {
 			gbufferCoord = uint2(clamp(sourceUV.xy * SharedData::BufferDim.xy, float2(0, 0), SharedData::BufferDim.xy - 1.0));
 		}
 	}

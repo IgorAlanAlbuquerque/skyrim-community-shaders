@@ -306,7 +306,7 @@ void ExtendedMaterials::DrawSSDM()
 
 	auto context = globals::d3d::context;
 	auto* deferred = Deferred::GetSingleton();
-	if (!deferred || !deferred->linearSampler)
+	if (!deferred || !deferred->linearSampler || !deferred->pointSampler)
 		return;
 
 	const UINT fullW = texDisplacement->desc.Width;
@@ -338,13 +338,14 @@ void ExtendedMaterials::DrawSSDM()
 	solveData.rcpFullHeight = fullH ? 1.0f / static_cast<float>(fullH) : 0.0f;
 	solveData.numMips = SSDM_MIP_LEVELS;
 	solveData.numIters = 8;
-	solveData.maxStepUv = 0.35f;
+	solveData.maxStepUv = 0.35f;  // Keep in sync with ExtendedMaterials.hlsli kSSDMDuvClampAbs (forward duv clamp).
 	solveData.damping = 0.62f;
 	cbufSSDMSolve->Update(solveData);
 	ID3D11Buffer* cbSolve = cbufSSDMSolve->CB();
 	context->CSSetConstantBuffers(0, 1, &cbSolve);
 	context->CSSetShaderResources(0, 1, &duvSRV);
-	context->CSSetSamplers(0, 1, &deferred->linearSampler);
+	ID3D11SamplerState* solveSamplers[] = { deferred->linearSampler, deferred->pointSampler };
+	context->CSSetSamplers(0, 2, solveSamplers);
 	ID3D11UnorderedAccessView* outUav = texSSDMLevel[0]->uav.get();
 	context->CSSetUnorderedAccessViews(0, 1, &outUav, nullptr);
 	context->CSSetShader(ssdmSolveCS.get(), nullptr, 0);
@@ -353,8 +354,8 @@ void ExtendedMaterials::DrawSSDM()
 	context->CSSetShader(nullptr, nullptr, 0);
 	context->CSSetShaderResources(0, 1, &nullSrv);
 	context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-	ID3D11SamplerState* nullSamp = nullptr;
-	context->CSSetSamplers(0, 1, &nullSamp);
+	ID3D11SamplerState* nullSamps[] = { nullptr, nullptr };
+	context->CSSetSamplers(0, 2, nullSamps);
 	ID3D11Buffer* nullCb = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullCb);
 
