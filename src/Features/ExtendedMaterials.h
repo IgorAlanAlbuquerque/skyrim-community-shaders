@@ -59,7 +59,7 @@ struct ExtendedMaterials : Feature
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 
-	// SSDM: lighting writes duv in RG and coverage in B of texDisplacement mip0; solve writes UV, validity (Z), and coverage (W) to texSSDMLevel[0].
+	// SSDM: lighting writes duv in RG and coverage in B of texDisplacement mip0; solve writes UV (RG), validity (Z), and coverage (W) here.
 	static constexpr int SSDM_MIP_LEVELS = 4;
 
 	eastl::unique_ptr<Texture2D> texDisplacement;
@@ -68,7 +68,7 @@ struct ExtendedMaterials : Feature
 	// Single-mip SRVs for SSDMBuildPyramid: avoids SRV/UAV overlap on the same texture (full-chain SRV + mip UAV is undefined in D3D11).
 	winrt::com_ptr<ID3D11ShaderResourceView> srvDisplacementMip[SSDM_MIP_LEVELS];
 
-	eastl::unique_ptr<Texture2D> texSSDMLevel[SSDM_MIP_LEVELS];
+	eastl::unique_ptr<Texture2D> texSSDM;
 
 	ID3D11ShaderResourceView* GetSSDMOffsetSRV() const;
 	void ClearDisplacementTexture();

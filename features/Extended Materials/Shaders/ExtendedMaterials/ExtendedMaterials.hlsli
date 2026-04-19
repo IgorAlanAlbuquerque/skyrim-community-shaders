@@ -385,7 +385,7 @@ namespace ExtendedMaterials
 	// POM-style tangent step (Vt.xy / |Vt.z|) then world-space offset and projection.
 	// Callers pass surface → camera (Lighting `viewDirection`, or `refractedViewDirection` for coated PBR).
 	void ComputeDisplacementDuvAndOffsetVS(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
-		float height, float displacementScale, uint eyeIndex, out float2 duv, out float3 offsetVS, out float clipTMax)
+		float height, float displacementScale, uint eyeIndex, out float2 duv, out float clipTMax)
 	{
 		float h = height;
 
@@ -410,16 +410,15 @@ namespace ExtendedMaterials
 
 		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
 		float3 offsetFull = FrameBuffer::WorldToView(worldOff, false, eyeIndex);
-		offsetVS = ClipViewOffsetForValidProjection(viewPosVS, offsetFull, eyeIndex, duv, clipTMax);
+		ClipViewOffsetForValidProjection(viewPosVS, offsetFull, eyeIndex, duv, clipTMax);
 	}
 
 	float2 ComputeDisplacementVector(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
 		float height, float displacementScale, uint eyeIndex, out float ssdmForwardCoverage)
 	{
 		float2 duv;
-		float3 offsetVS;
 		float clipTMax;
-		ComputeDisplacementDuvAndOffsetVS(viewPosVS, viewDirWorld, tbnTr0, tbnTr1, tbnTr2, height, displacementScale, eyeIndex, duv, offsetVS, clipTMax);
+		ComputeDisplacementDuvAndOffsetVS(viewPosVS, viewDirWorld, tbnTr0, tbnTr1, tbnTr2, height, displacementScale, eyeIndex, duv, clipTMax);
 
 		// Do not scale duv by view angle here — that flattens grazing silhouettes. |duv| clamp + clip + solve/composite gates handle smear.
 		if (clipTMax < kSSDMClipTMaxMin) {

@@ -17,8 +17,15 @@ void main(uint3 dtid : SV_DispatchThreadID)
 	float4 v10 = SrcDuv.Load(int3(base + int2(1, 0), 0));
 	float4 v01 = SrcDuv.Load(int3(base + int2(0, 1), 0));
 	float4 v11 = SrcDuv.Load(int3(base + int2(1, 1), 0));
-	// Average duv; propagate SSDM coverage (B) as max so coarse mips know any child had displacement shading.
-	float2 duvAvg = (v00.xy + v10.xy + v01.xy + v11.xy) * 0.25;
+	// Average duv only from children with forward SSDM coverage. Plain mean blends
+	// foreground duv with background (0) at silhouettes → bogus coarse vectors and noisy negative space.
+	static const float kCovGate = 0.5;
+	float w00 = v00.z > kCovGate ? 1.0 : 0.0;
+	float w10 = v10.z > kCovGate ? 1.0 : 0.0;
+	float w01 = v01.z > kCovGate ? 1.0 : 0.0;
+	float w11 = v11.z > kCovGate ? 1.0 : 0.0;
+	float wsum = w00 + w10 + w01 + w11;
+	float2 duvAvg = wsum > 0.0 ? (v00.xy * w00 + v10.xy * w10 + v01.xy * w01 + v11.xy * w11) / wsum : float2(0, 0);
 	float cov = max(max(v00.z, v10.z), max(v01.z, v11.z));
 	DstDuv[dtid.xy] = float4(duvAvg, cov, 0.0);
 }

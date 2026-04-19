@@ -22,8 +22,7 @@ cbuffer SSDMSolveCB : register(b0)
 };
 
 Texture2D<float4> DuvPyramid : register(t0);
-SamplerState LinearSampler : register(s0);
-SamplerState PointSampler : register(s1);
+SamplerState PointSampler : register(s0);
 RWTexture2D<float4> OutAbsUV : register(u0);
 
 [numthreads(8, 8, 1)]
@@ -36,7 +35,8 @@ void main(uint3 dtid : SV_DispatchThreadID)
 	float coverage = DuvPyramid.Load(int3(int2(dtid.xy), 0)).z;
 
 	float coarseMip = max(0.0, float(NumMips - 1));
-	float2 tCoarse = uv + DuvPyramid.SampleLevel(LinearSampler, uv, coarseMip).xy;
+	// Point mip: linear would blend duv across surface/sky and silhouette edges (same failure mode as mip0 bilinear).
+	float2 tCoarse = uv + DuvPyramid.SampleLevel(PointSampler, uv, coarseMip).xy;
 	bool ssdmValid = SSDM_InStrictTile(tCoarse);
 	float2 t = saturate(tCoarse);
 

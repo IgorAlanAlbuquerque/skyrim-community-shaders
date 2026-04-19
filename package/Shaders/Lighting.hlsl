@@ -1072,7 +1072,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 		height = ExtendedMaterials::AdjustDisplacementNormalized(height, displacementParams);
 		ssdmActive = true;
-		ssdmViewDir = viewDirection;
 		ssdmHeight = height - 0.5;
 		ssdmDispScale = ematMeshDispMag;
 	}
@@ -1107,7 +1106,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				endif
 				cmHeight = ExtendedMaterials::AdjustDisplacementNormalized(cmHeight, displacementParams);
 				ssdmActive = true;
-				ssdmViewDir = viewDirection;
 				ssdmHeight = cmHeight - 0.5;
 				ssdmDispScale = ematMeshDispMag;
 				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
@@ -1263,7 +1261,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.y = weights[5];
 		}
 		ssdmActive = true;
-		ssdmViewDir = viewDirection;
 		ssdmHeight = terrainHeight;
 		ssdmDispScale = ematTerrainDispMag;
 	}

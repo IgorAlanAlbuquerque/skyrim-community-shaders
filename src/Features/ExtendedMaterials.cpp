@@ -86,7 +86,7 @@ void ExtendedMaterials::DrawSettings()
 		static float debugRescale = .3f;
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 		ImGui::TextWrapped(
-			"Displacement and SSDM level targets are RGBA32F; RG are often tiny signed values, so previews can look black or flat even when data is present. "
+			"Displacement and SSDM targets are RGBA32F; RG are often tiny signed values, so previews can look black or flat even when data is present. "
 			"Use the numeric thresholds above or an external capture tool if you need exact duv magnitudes.");
 
 		if (!texDisplacement || !texDisplacement->srv.get()) {
@@ -95,16 +95,14 @@ void ExtendedMaterials::DrawSettings()
 			BUFFER_VIEWER_NODE_TITLE(texDisplacement, "Displacement (RG = duv)", debugRescale);
 		}
 
-		for (int i = 0; i < SSDM_MIP_LEVELS; ++i) {
-			if (texSSDMLevel[i] && texSSDMLevel[i]->srv.get()) {
-				char buf[128];
-				snprintf(buf, sizeof(buf), "SSDM Level %d (%ux%u)", i, texSSDMLevel[i]->desc.Width, texSSDMLevel[i]->desc.Height);
-				if (ImGui::TreeNode(buf)) {
-					ImGui::Image(
-						ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(texSSDMLevel[i]->srv.get()))),
-						{ texSSDMLevel[i]->desc.Width * debugRescale, texSSDMLevel[i]->desc.Height * debugRescale });
-					ImGui::TreePop();
-				}
+		if (texSSDM && texSSDM->srv.get()) {
+			char buf[128];
+			snprintf(buf, sizeof(buf), "SSDM solve output (%ux%u)", texSSDM->desc.Width, texSSDM->desc.Height);
+			if (ImGui::TreeNode(buf)) {
+				ImGui::Image(
+					ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(texSSDM->srv.get()))),
+					{ texSSDM->desc.Width * debugRescale, texSSDM->desc.Height * debugRescale });
+				ImGui::TreePop();
 			}
 		}
 
@@ -198,10 +196,10 @@ void ExtendedMaterials::SetupResources()
 		}
 	}
 
-	for (int i = 0; i < SSDM_MIP_LEVELS; ++i) {
-		D3D11_TEXTURE2D_DESC levelDesc = {
-			.Width = std::max(1u, w >> i),
-			.Height = std::max(1u, h >> i),
+	{
+		D3D11_TEXTURE2D_DESC ssdmDesc = {
+			.Width = w,
+			.Height = h,
 			.MipLevels = 1,
 			.ArraySize = 1,
 			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
@@ -211,13 +209,12 @@ void ExtendedMaterials::SetupResources()
 			.CPUAccessFlags = 0,
 			.MiscFlags = 0
 		};
-
-		texSSDMLevel[i] = eastl::make_unique<Texture2D>(levelDesc);
-		texSSDMLevel[i]->CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC{
+		texSSDM = eastl::make_unique<Texture2D>(ssdmDesc);
+		texSSDM->CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC{
 			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
-		texSSDMLevel[i]->CreateUAV(D3D11_UNORDERED_ACCESS_VIEW_DESC{
+		texSSDM->CreateUAV(D3D11_UNORDERED_ACCESS_VIEW_DESC{
 			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 } });
@@ -247,7 +244,7 @@ void ExtendedMaterials::RegisterDisplacementRT()
 
 ID3D11ShaderResourceView* ExtendedMaterials::GetSSDMOffsetSRV() const
 {
-	return (texSSDMLevel[0] && settings.EnableParallax) ? texSSDMLevel[0]->srv.get() : nullptr;
+	return (texSSDM && settings.EnableParallax) ? texSSDM->srv.get() : nullptr;
 }
 
 void ExtendedMaterials::ClearDisplacementTexture()
@@ -294,7 +291,7 @@ void ExtendedMaterials::DrawSSDM()
 {
 	if (!settings.EnableParallax)
 		return;
-	if (!texDisplacement || !texSSDMLevel[0] || !cbufSSDMSolve)
+	if (!texDisplacement || !texSSDM || !cbufSSDMSolve)
 		return;
 
 	CompileSSDMComputeShadersIfNeeded();
@@ -306,7 +303,7 @@ void ExtendedMaterials::DrawSSDM()
 
 	auto context = globals::d3d::context;
 	auto* deferred = Deferred::GetSingleton();
-	if (!deferred || !deferred->linearSampler || !deferred->pointSampler)
+	if (!deferred || !deferred->pointSampler)
 		return;
 
 	const UINT fullW = texDisplacement->desc.Width;
@@ -344,9 +341,9 @@ void ExtendedMaterials::DrawSSDM()
 	ID3D11Buffer* cbSolve = cbufSSDMSolve->CB();
 	context->CSSetConstantBuffers(0, 1, &cbSolve);
 	context->CSSetShaderResources(0, 1, &duvSRV);
-	ID3D11SamplerState* solveSamplers[] = { deferred->linearSampler, deferred->pointSampler };
-	context->CSSetSamplers(0, 2, solveSamplers);
-	ID3D11UnorderedAccessView* outUav = texSSDMLevel[0]->uav.get();
+	ID3D11SamplerState* solveSamplers[] = { deferred->pointSampler };
+	context->CSSetSamplers(0, 1, solveSamplers);
+	ID3D11UnorderedAccessView* outUav = texSSDM->uav.get();
 	context->CSSetUnorderedAccessViews(0, 1, &outUav, nullptr);
 	context->CSSetShader(ssdmSolveCS.get(), nullptr, 0);
 	context->Dispatch((fullW + 7u) / 8u, (fullH + 7u) / 8u, 1);
@@ -354,14 +351,8 @@ void ExtendedMaterials::DrawSSDM()
 	context->CSSetShader(nullptr, nullptr, 0);
 	context->CSSetShaderResources(0, 1, &nullSrv);
 	context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-	ID3D11SamplerState* nullSamps[] = { nullptr, nullptr };
-	context->CSSetSamplers(0, 2, nullSamps);
+	ID3D11SamplerState* nullSamps[] = { nullptr };
+	context->CSSetSamplers(0, 1, nullSamps);
 	ID3D11Buffer* nullCb = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullCb);
-
-	for (int i = 1; i < SSDM_MIP_LEVELS; ++i) {
-		const UINT sub = D3D11CalcSubresource(static_cast<UINT>(i), 0, static_cast<UINT>(SSDM_MIP_LEVELS));
-		context->CopySubresourceRegion(texSSDMLevel[i]->resource.get(), 0, 0, 0, 0,
-			texDisplacement->resource.get(), sub, nullptr);
-	}
 }
