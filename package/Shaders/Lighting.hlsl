@@ -344,7 +344,7 @@ struct PS_OUTPUT
 	float4 Specular: SV_Target4;
 	float4 Reflectance: SV_Target5;
 	float4 Masks: SV_Target6;
-	float2 SSDMDisplacement: SV_Target7;
+	float4 SSDMDisplacement: SV_Target7;
 };
 #else
 struct PS_OUTPUT
@@ -1013,9 +1013,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	else
 	float mipLevel = 0;
 #	endif  // LANDSCAPE
-	float2 ssdmDisplacement = float2(0, 0);
+	float3 ssdmViewDir = viewDirection;
+	float ssdmHeight = 0.0;
+	float ssdmDispScale = 0.0;
 	bool ssdmActive = false;
-	float reliefShadowMul = 1.0;
 
 #	if defined(EMAT)
 #		if defined(LANDSCAPE)
@@ -1070,19 +1071,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float height = TexParallaxSampler.Sample(SampParallaxSampler, uv).w;
 #			endif
 		height = ExtendedMaterials::AdjustDisplacementNormalized(height, displacementParams);
-#			if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
-		{
-			float3 Lsun = normalize(DirLightDirection.xyz);
-			float NdotL = saturate(dot(normalize(tbnTr[2]), Lsun));
-			float2 us = ExtendedMaterials::ReliefShadowUvStepTowardsLight(Lsun, normalize(tbnTr[0]), normalize(tbnTr[1]), NdotL, ematMeshDispMag);
-			float mipRel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
-			float hN = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv + us, mipRel).w;
-			hN = ExtendedMaterials::AdjustDisplacementNormalized(hN, displacementParams);
-			reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(height, hN, NdotL, ematMeshDispMag, 1.0);
-		}
-#			endif
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], height - 0.5, ematMeshDispMag, eyeIndex);
 		ssdmActive = true;
+		ssdmViewDir = viewDirection;
+		ssdmHeight = height - 0.5;
+		ssdmDispScale = ematMeshDispMag;
 	}
 #		endif  // PARALLAX && !TRUE_PBR
 
@@ -1114,19 +1106,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float cmHeight = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).w;
 #				endif
 				cmHeight = ExtendedMaterials::AdjustDisplacementNormalized(cmHeight, displacementParams);
-#					if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
-				{
-					float3 Lsun = normalize(DirLightDirection.xyz);
-					float NdotL = saturate(dot(normalize(tbnTr[2]), Lsun));
-					float2 us = ExtendedMaterials::ReliefShadowUvStepTowardsLight(Lsun, normalize(tbnTr[0]), normalize(tbnTr[1]), NdotL, ematMeshDispMag);
-					float mipRel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexEnvMaskSampler);
-					float hN = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv + us, mipRel).w;
-					hN = ExtendedMaterials::AdjustDisplacementNormalized(hN, displacementParams);
-					reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(cmHeight, hN, NdotL, ematMeshDispMag, 1.0);
-				}
-#					endif
-				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], cmHeight - 0.5, ematMeshDispMag, eyeIndex);
 				ssdmActive = true;
+				ssdmViewDir = viewDirection;
+				ssdmHeight = cmHeight - 0.5;
+				ssdmDispScale = ematMeshDispMag;
 				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 			} else {
 				complexMaterialColor = envMaskSample;
@@ -1177,27 +1160,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			pbrHeight = TexParallaxSampler.Sample(SampParallaxSampler, uv).x;
 		}
 		pbrHeight = ExtendedMaterials::AdjustDisplacementNormalized(pbrHeight, displacementParams);
-		{
-			float3 Lsun = normalize(DirLightDirection.xyz);
-			float NdotL = saturate(dot(normalize(tbnTr[2]), Lsun));
-			float2 us = ExtendedMaterials::ReliefShadowUvStepTowardsLight(Lsun, normalize(tbnTr[0]), normalize(tbnTr[1]), NdotL, ematMeshDispMag);
-			float pbrHN;
-			[branch] if ((PBRFlags & PBR::Flags::PackedDisplacementInRmaosAlpha) != 0)
-			{
-				float mipRel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexRMAOSSampler);
-				pbrHN = TexRMAOSSampler.SampleLevel(SampRMAOSSampler, uv + us, mipRel).a;
-			}
-			else
-			{
-				float mipRel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
-				pbrHN = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv + us, mipRel).x;
-			}
-			pbrHN = ExtendedMaterials::AdjustDisplacementNormalized(pbrHN, displacementParams);
-			reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(pbrHeight, pbrHN, NdotL, ematMeshDispMag, 1.0);
-		}
 		const float pbrRelief = (pbrHeight - 0.5) * PBRParams1.y;
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, refractedViewDirection, tbnTr[0], tbnTr[1], tbnTr[2], pbrRelief, ematMeshDispMag, eyeIndex);
 		ssdmActive = true;
+		ssdmViewDir = refractedViewDirection;
+		ssdmHeight = pbrRelief;
+		ssdmDispScale = ematMeshDispMag;
 	}
 #			endif  // !FACEGEN
 #		endif      // TRUE_PBR
@@ -1287,18 +1254,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			else
 		float terrainHeight = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, displacementParams, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, weights);
 #			endif
-		{
-			float3 Lsun = normalize(DirLightDirection.xyz);
-			float NdotL = saturate(dot(normalize(tbnTr[2]), Lsun));
-			float2 us = ExtendedMaterials::ReliefShadowUvStepTowardsLightLandscape(Lsun, normalize(tbnTr[0]), normalize(tbnTr[1]), NdotL, ematTerrainDispMag);
-			float weightsReliefN[6];
-#			if defined(TERRAIN_VARIATION)
-			float terrainHeightN = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv + us, mipLevels, displacementParams, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, dx, dy, weightsReliefN);
-#			else
-			float terrainHeightN = ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv + us, mipLevels, displacementParams, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, weightsReliefN);
-#			endif
-			reliefShadowMul = ExtendedMaterials::CheapReliefSelfShadow(terrainHeight, terrainHeightN, NdotL, ematTerrainDispMag, 1.95);
-		}
 		if (SharedData::extendedMaterialSettings.EnableHeightBlending) {
 			input.LandBlendWeights1.x = weights[0];
 			input.LandBlendWeights1.y = weights[1];
@@ -1307,8 +1262,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, viewDirection, tbnTr[0], tbnTr[1], tbnTr[2], terrainHeight, ematTerrainDispMag, eyeIndex);
 		ssdmActive = true;
+		ssdmViewDir = viewDirection;
+		ssdmHeight = terrainHeight;
+		ssdmDispScale = ematTerrainDispMag;
 	}
 #			if defined(TERRAIN_VARIATION)
 	else if (useTerrainVariation) {
@@ -2962,11 +2919,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
-#	if defined(DEFERRED)
-	// Cheap relief self-shadow (toward-sun height tap only for occlusion; see CheapReliefSelfShadow).
-	color.xyz *= reliefShadowMul;
-#	endif
-
 #	if !defined(DEFERRED)
 	color.xyz = Color::IrradianceToLinear(color.xyz);
 	color.xyz += specularColor;
@@ -3178,12 +3130,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
 #		if defined(DEFERRED)
-	// Deferred composite samples absolute UV from texSSDMLevel[0] after compute solve.
-	// Lighting stores per-pixel duv; ExtendedMaterials builds a duv mip pyramid + Picard refine → absolute fetch UV.
-	float2 ssdmOut = float2(0, 0);
-	if (ssdmActive)
-		ssdmOut = ssdmDisplacement;
-	psout.SSDMDisplacement = ssdmOut;
+	// RG: duv for SSDM pyramid + solve; BA unused (solve outputs absolute UV to texSSDMLevel[0] for composite).
+	float4 ssdmPack = float4(0, 0, 0, 0);
+#			if defined(EMAT)
+	if (ssdmActive) {
+		float2 duv = ExtendedMaterials::ComputeDisplacementVector(
+			viewPosition, ssdmViewDir, tbnTr[0], tbnTr[1], tbnTr[2], ssdmHeight, ssdmDispScale, eyeIndex);
+		ssdmPack = float4(duv, 0, 0);
+	}
+#			endif
+	psout.SSDMDisplacement = ssdmPack;
 #		endif
 
 #		if defined(SNOW)

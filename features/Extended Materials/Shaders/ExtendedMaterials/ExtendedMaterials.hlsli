@@ -345,49 +345,10 @@ namespace ExtendedMaterials
 
 #endif
 
-	// One extra height sample stepped toward the sun in tangent UV — cheap contact shading for relief / SSDM.
-	float2 ReliefShadowUvStepTowardsLight(float3 Lws, float3 Tw, float3 Bw, float NdotL, float displacementScale)
-	{
-		float2 Ltb = float2(dot(Lws, Tw), dot(Lws, Bw));
-		float2 us = -normalize(Ltb + 1e-5) * (0.0016 + displacementScale * 0.038);
-		us *= rcp(max(NdotL, 0.11));
-		return us;
-	}
-
-	// Landscape UV spans large world patches — use a larger tangent step so the neighbor tap moves ~a texel.
-	float2 ReliefShadowUvStepTowardsLightLandscape(float3 Lws, float3 Tw, float3 Bw, float NdotL, float displacementScale)
-	{
-		float2 Ltb = float2(dot(Lws, Tw), dot(Lws, Bw));
-		float2 us = -normalize(Ltb + 1e-5) * (0.0048 + displacementScale * 0.12);
-		us *= rcp(max(NdotL, 0.11));
-		return us;
-	}
-
-	// hToward: height at uv stepped toward the sun in tangent UV. Occlusion only when that tap is higher than center.
-	// sunFacing suppresses relief on surfaces facing away from the sun.
-	float CheapReliefSelfShadow(float hC, float hToward, float NdotL, float displacementScale, float dhScale)
-	{
-		float w = saturate(displacementScale * 11.0);
-		if (w < 0.045)
-			return 1.0;
-
-		float sunFacing = saturate(NdotL * 6.2 - 0.32);
-		if (sunFacing < 0.02)
-			return 1.0;
-
-		float dh = max(0.0, (hToward - hC) * dhScale);
-		float edge = 0.13 + (1.0 - NdotL) * 0.11;
-		float occLin = saturate((dh - edge) * (3.8 + 9.0 * (1.0 - NdotL)));
-		float x = saturate(occLin * w * sunFacing * 0.42);
-		static const float kShadowPow = 1.22;
-		static const float kReliefFloor = 0.84;
-		return max(pow(saturate(1.0 - x), kShadowPow), kReliefFloor);
-	}
-
 	// POM-style tangent step (Vt.xy / Vt.z) then world-space offset and projection.
 	// Callers pass surface → camera (Lighting `viewDirection`, or `refractedViewDirection` for coated PBR).
-	float2 ComputeDisplacementVector(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
-		float height, float displacementScale, uint eyeIndex)
+	void ComputeDisplacementDuvAndOffsetVS(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
+		float height, float displacementScale, uint eyeIndex, out float2 duv, out float3 offsetVS)
 	{
 		float h = clamp(height, -0.75, 0.75);
 
@@ -410,10 +371,19 @@ namespace ExtendedMaterials
 		float amp = h * displacementScale * (kLegacyNormalPush / kDefaultDisplacementScale) * kTangentParallaxAmpScale;
 
 		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
-		float3 offsetVS = FrameBuffer::WorldToView(worldOff, false, eyeIndex);
+		offsetVS = FrameBuffer::WorldToView(worldOff, false, eyeIndex);
 
 		float2 uv0 = FrameBuffer::ViewToUV(viewPosVS, true, eyeIndex);
 		float2 uv1 = FrameBuffer::ViewToUV(viewPosVS + offsetVS, true, eyeIndex);
-		return uv1 - uv0;
+		duv = uv1 - uv0;
+	}
+
+	float2 ComputeDisplacementVector(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
+		float height, float displacementScale, uint eyeIndex)
+	{
+		float2 duv;
+		float3 offsetVS;
+		ComputeDisplacementDuvAndOffsetVS(viewPosVS, viewDirWorld, tbnTr0, tbnTr1, tbnTr2, height, displacementScale, eyeIndex, duv, offsetVS);
+		return duv;
 	}
 }

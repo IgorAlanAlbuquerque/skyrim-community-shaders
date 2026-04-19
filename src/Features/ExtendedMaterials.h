@@ -59,7 +59,7 @@ struct ExtendedMaterials : Feature
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 
-	// SSDM: lighting writes duv to texDisplacement mip0; compute builds duv mips + Picard solve → absolute UV in texSSDMLevel[0].
+	// SSDM: lighting writes duv in RG of texDisplacement mip0; pyramid + solve write absolute fetch UV to texSSDMLevel[0].
 	static constexpr int SSDM_MIP_LEVELS = 4;
 
 	eastl::unique_ptr<Texture2D> texDisplacement;

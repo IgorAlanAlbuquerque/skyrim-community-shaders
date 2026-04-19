@@ -11,9 +11,9 @@ cbuffer SSDMSolveCB : register(b0)
 	float Damping;
 };
 
-Texture2D<float2> DuvPyramid : register(t0);
+Texture2D<float4> DuvPyramid : register(t0);
 SamplerState LinearSampler : register(s0);
-RWTexture2D<float2> OutAbsUV : register(u0);
+RWTexture2D<float4> OutAbsUV : register(u0);
 
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID)
@@ -39,5 +39,5 @@ void main(uint3 dtid : SV_DispatchThreadID)
 		t = saturate(next);
 	}
 
-	OutAbsUV[dtid.xy] = t;
+	OutAbsUV[dtid.xy] = float4(t, 0, 0);
 }

@@ -114,15 +114,22 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
+	float depth = DepthTexture[dispatchID.xy];
+	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
+	positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);
+	positionWS.xyz = positionWS.xyz / positionWS.w;
+
 	uint2 gbufferCoord = dispatchID.xy;
 #if defined(SSDM)
 	{
-		// Absolute fetch UV (solve pass). Inactive pixels resolve to ~stereo UV so this is identity without a special sentinel.
+		// Absolute fetch UV from SSDM solve (texSSDMLevel[0]). Inactive pixels use ~stereo UV; treat as no remap.
 		float2 sourceUV = SSDMOffsetTexture[dispatchID.xy];
 		// Do not use SharedData::ConvertUVToSampleCoord — that path expects per-eye mono UV (then
 		// stereo-packs + DR-adjusts) like depth reads from ViewToUV; applying it here double-packs
 		// VR and skews flat/DR, which reads the wrong gbuffer columns (split / ghost image).
-		gbufferCoord = uint2(clamp(sourceUV.xy * SharedData::BufferDim.xy, float2(0, 0), SharedData::BufferDim.xy - 1.0));
+		if (any(sourceUV != 0)) {
+			gbufferCoord = uint2(clamp(sourceUV.xy * SharedData::BufferDim.xy, float2(0, 0), SharedData::BufferDim.xy - 1.0));
+		}
 	}
 #endif
 
@@ -136,11 +143,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 #endif
 	float3 specularColor = SpecularTexture[gbufferCoord];
 	float3 albedo = AlbedoTexture[gbufferCoord];
-
-	float depth = DepthTexture[dispatchID.xy];
-	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
-	positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);
-	positionWS.xyz = positionWS.xyz / positionWS.w;
 
 	if (depth == 1.0)
 		MotionVectorsRW[dispatchID.xy] = MotionBlur::GetSSMotionVector(positionWS, positionWS, eyeIndex);  // Apply sky motion vectors

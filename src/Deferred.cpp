@@ -112,7 +112,7 @@ void Deferred::SetupResources()
 		SetupRenderTarget(MASKS, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 
 		// SSDM Displacement
-		SetupRenderTarget(SSDM_DISPLACEMENT, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R16G16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+		SetupRenderTarget(SSDM_DISPLACEMENT, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
 
 		// TAA Water Buffers
 		SetupRenderTarget(RE::RENDER_TARGETS::kWATER_1, texDesc, srvDesc, rtvDesc, uavDesc, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
@@ -403,8 +403,8 @@ void Deferred::DeferredPasses()
 
 		context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
 
-		ID3D11ShaderResourceView* nullSRVs[3]{ nullptr, nullptr, nullptr };
-		context->CSSetShaderResources(16, 3, nullSRVs);
+		ID3D11ShaderResourceView* nullSRVs[4]{ nullptr, nullptr, nullptr, nullptr };
+		context->CSSetShaderResources(16, 4, nullSRVs);
 	}
 
 	// VR: Deactivate stencil culling now that geometry rendering is complete.
