@@ -376,16 +376,8 @@ namespace ExtendedMaterials
 		return o;
 	}
 
-	// POM-style tangent step then world-space offset and projection.
+	// POM-style tangent step (Vt.xy / |Vt.z|) then world-space offset and projection.
 	// Callers pass surface → camera (Lighting `viewDirection`, or `refractedViewDirection` for coated PBR).
-	//
-	// Offset limiting (Welsh 2004, “Parallax Mapping with Offset Limiting”): at grazing views, Vt.xy/Vt.z
-	// blows up; we blend toward a softer denominator cap (same idea as limiting max parallax offset).
-	// Reference course code (tangent-space camera vector, no z divide in offset): see
-	// https://github.com/marcusstenbeck/tncg14-parallax-mapping/blob/master/parallaxmapping.frag
-	//
-	// Horizon / grazing recess (after Amose05, CC0 “SPOM” Godot shader — amplitude trim vs |N·V|, not mesh discard):
-	// https://godotshaders.com/shader/spom-with-horizon-detection-self-shading-silhouette-clipping-parallax-occlusion-mapping-self-shading-horizon-trimming-erosion/
 	void ComputeDisplacementDuvAndOffsetVS(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
 		float height, float displacementScale, uint eyeIndex, out float2 duv, out float3 offsetVS)
 	{
@@ -401,30 +393,14 @@ namespace ExtendedMaterials
 		Vt.y = dot(Vw, Bw);
 		Vt.z = dot(Vw, Nw);
 
-		// Magnitude of tangent Z at grazing angles (legacy SSDM / Skyrim tuning). A signed 1/Vt.z denominator
-		// flips parallaxDir whenever Vt.z < 0 and inverts relief (rocks appear pushed into the mesh / terrain).
-		float znHard = max(abs(Vt.z), 1e-5);
-		float znSoft = max(abs(Vt.z), 0.14);
-		float2 parallaxDirHard = Vt.xy / znHard;
-		float2 parallaxDirSoft = Vt.xy / znSoft;
-		float vn = length(Vt);
-		float3 Vtn = vn > 1e-8 ? (Vt / vn) : float3(0, 0, 1);
-		float grazing = saturate(1.0 - abs(Vtn.z));
-		float limBlend = smoothstep(0.22, 0.94, grazing);
-		float2 parallaxDir = lerp(parallaxDirHard, parallaxDirSoft, limBlend);
+		// Use |Vt.z| so parallaxDir does not flip sign when the view passes below the tangent plane (Vt.z < 0).
+		float zn = max(abs(Vt.z), 1e-5);
+		float2 parallaxDir = Vt.xy / zn;
 
 		static const float kLegacyNormalPush = 32.0;
 		static const float kDefaultDisplacementScale = 0.05;
 		static const float kTangentParallaxAmpScale = 0.22;
 		float amp = h * displacementScale * (kLegacyNormalPush / kDefaultDisplacementScale) * kTangentParallaxAmpScale;
-
-		// Recess relief when |N·V| in tangent frame is small (horizon trimming analogue).
-		static const float kHorizonSafe = 0.28;
-		static const float kHorizonPower = 2.0;
-		static const float kHorizonMinMul = 0.38;
-		float tHor = saturate(1.0 - abs(Vtn.z) / max(kHorizonSafe, 1e-4));
-		float horizonMul = lerp(1.0, kHorizonMinMul, pow(tHor, kHorizonPower));
-		amp *= horizonMul;
 
 		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
 		float3 offsetFull = FrameBuffer::WorldToView(worldOff, false, eyeIndex);

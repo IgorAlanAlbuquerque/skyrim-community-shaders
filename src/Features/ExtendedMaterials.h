@@ -65,6 +65,8 @@ struct ExtendedMaterials : Feature
 	eastl::unique_ptr<Texture2D> texDisplacement;
 	winrt::com_ptr<ID3D11RenderTargetView> rtvDisplacement;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavDisplacement[SSDM_MIP_LEVELS];
+	// Single-mip SRVs for SSDMBuildPyramid: avoids SRV/UAV overlap on the same texture (full-chain SRV + mip UAV is undefined in D3D11).
+	winrt::com_ptr<ID3D11ShaderResourceView> srvDisplacementMip[SSDM_MIP_LEVELS];
 
 	eastl::unique_ptr<Texture2D> texSSDMLevel[SSDM_MIP_LEVELS];
 
@@ -73,12 +75,6 @@ struct ExtendedMaterials : Feature
 
 private:
 	void CompileSSDMComputeShadersIfNeeded();
-
-	struct alignas(16) SSDMBuildPyramidCB {
-		std::int32_t srcMip;
-		std::int32_t pad[3];
-	};
-	STATIC_ASSERT_ALIGNAS_16(SSDMBuildPyramidCB);
 
 	struct alignas(16) SSDMSolveCB {
 		float fullWidth;
@@ -91,11 +87,9 @@ private:
 		float damping;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSDMSolveCB);
-	static_assert(sizeof(SSDMBuildPyramidCB) == 16);
 	static_assert(sizeof(SSDMSolveCB) == 32);
 
 	winrt::com_ptr<ID3D11ComputeShader> ssdmBuildPyramidCS;
 	winrt::com_ptr<ID3D11ComputeShader> ssdmSolveCS;
-	eastl::unique_ptr<ConstantBuffer> cbufSSDMBuild;
 	eastl::unique_ptr<ConstantBuffer> cbufSSDMSolve;
 };

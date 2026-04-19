@@ -188,6 +188,13 @@ void ExtendedMaterials::SetupResources()
 				.Texture2D = { .MipSlice = (UINT)i }
 			};
 			DX::ThrowIfFailed(device->CreateUnorderedAccessView(texDisplacement->resource.get(), &mipUav, uavDisplacement[i].put()));
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC mipSrv = {
+				.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MostDetailedMip = (UINT)i, .MipLevels = 1 },
+			};
+			DX::ThrowIfFailed(device->CreateShaderResourceView(texDisplacement->resource.get(), &mipSrv, srvDisplacementMip[i].put()));
 		}
 	}
 
@@ -216,7 +223,6 @@ void ExtendedMaterials::SetupResources()
 			.Texture2D = { .MipSlice = 0 } });
 	}
 
-	cbufSSDMBuild = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc(sizeof(SSDMBuildPyramidCB), false));
 	cbufSSDMSolve = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc(sizeof(SSDMSolveCB), false));
 
 	ClearShaderCache();
@@ -288,7 +294,7 @@ void ExtendedMaterials::DrawSSDM()
 {
 	if (!settings.EnableParallax)
 		return;
-	if (!texDisplacement || !texSSDMLevel[0] || !cbufSSDMBuild || !cbufSSDMSolve)
+	if (!texDisplacement || !texSSDMLevel[0] || !cbufSSDMSolve)
 		return;
 
 	CompileSSDMComputeShadersIfNeeded();
@@ -309,12 +315,9 @@ void ExtendedMaterials::DrawSSDM()
 	ID3D11ShaderResourceView* duvSRV = texDisplacement->srv.get();
 
 	for (int dstMip = 1; dstMip < SSDM_MIP_LEVELS; ++dstMip) {
-		SSDMBuildPyramidCB buildData{};
-		buildData.srcMip = dstMip - 1;
-		cbufSSDMBuild->Update(buildData);
-		ID3D11Buffer* cb = cbufSSDMBuild->CB();
-		context->CSSetConstantBuffers(0, 1, &cb);
-		context->CSSetShaderResources(0, 1, &duvSRV);
+		const int srcMip = dstMip - 1;
+		ID3D11ShaderResourceView* srcSrv = srvDisplacementMip[srcMip].get();
+		context->CSSetShaderResources(0, 1, &srcSrv);
 		ID3D11UnorderedAccessView* dstUav = uavDisplacement[dstMip].get();
 		context->CSSetUnorderedAccessViews(0, 1, &dstUav, nullptr);
 		context->CSSetShader(ssdmBuildPyramidCS.get(), nullptr, 0);
