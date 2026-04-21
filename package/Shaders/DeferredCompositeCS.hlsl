@@ -122,6 +122,8 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	uint2 gbufferCoord = dispatchID.xy;
 #if defined(SSDM)
 	{
+		// Buffer-center UV (no DR2 / stereo) — must match SSDM solve output and remapCoord = sourceUV * BufferDim.
+		float2 uvBufCenter = (float2(dispatchID.xy) + 0.5) * SharedData::BufferDim.zw;
 		// Depth gate rejects sky; UV inset + hop bound reduce edge garbage. (Depth/normal cross-tests were too strict in practice.)
 		static const float kSSDMCompUvInset = 0.0015;
 		static const float kSSDMMaxRemapUvDist = 0.36;
@@ -133,7 +135,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		float ssdmValid = ssdmSample.z;
 		float ssdmCoverage = ssdmSample.w;
 		bool uvStrictInterior = all(sourceUV > kSSDMCompUvInset.xx && sourceUV < (1.0 - kSSDMCompUvInset).xx);
-		float2 remapDelta = sourceUV - uv;
+		float2 remapDelta = sourceUV - uvBufCenter;
 		bool remapBounded = dot(remapDelta, remapDelta) < kSSDMMaxRemapUvDist * kSSDMMaxRemapUvDist;
 		// Do not use SharedData::ConvertUVToSampleCoord — that path expects per-eye mono UV (then
 		// stereo-packs + DR-adjusts) like depth reads from ViewToUV; applying it here double-packs

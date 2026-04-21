@@ -77,17 +77,25 @@ private:
 	void CompileSSDMComputeShadersIfNeeded();
 
 	struct alignas(16) SSDMSolveCB {
-		float fullWidth;
-		float fullHeight;
-		float rcpFullWidth;
-		float rcpFullHeight;
-		std::int32_t numMips;
-		std::int32_t numIters;
+		float surfaceWidth;
+		float surfaceHeight;
+		float bufferWidth;
+		float bufferHeight;
+		float rcpBufferWidth;
+		float rcpBufferHeight;
 		float maxStepUv;
 		float damping;
+		std::int32_t numMips;
+		std::int32_t numIters;
+		std::int32_t pad0;
+		std::int32_t pad1;
+		std::int32_t pad2;
+		std::int32_t pad3;
+		std::int32_t pad4;
+		std::int32_t pad5;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSDMSolveCB);
-	static_assert(sizeof(SSDMSolveCB) == 32);
+	static_assert(sizeof(SSDMSolveCB) == 64);
 
 	winrt::com_ptr<ID3D11ComputeShader> ssdmBuildPyramidCS;
 	winrt::com_ptr<ID3D11ComputeShader> ssdmSolveCS;

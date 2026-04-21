@@ -407,6 +407,10 @@ namespace ExtendedMaterials
 		static const float kDefaultDisplacementScale = 0.05;
 		static const float kTangentParallaxAmpScale = 0.22;
 		float amp = h * displacementScale * (kLegacyNormalPush / kDefaultDisplacementScale) * kTangentParallaxAmpScale;
+		// Keep SSDM apparent height stable across dynamic resolution tiers (DLAA -> DLSS perf).
+		// Without this, lower internal resolution over-amplifies the screen-space displacement footprint.
+		float drScale = saturate(sqrt(FrameBuffer::DynamicResolutionParams1.x * FrameBuffer::DynamicResolutionParams1.y));
+		amp *= drScale;
 
 		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
 		float3 offsetFull = FrameBuffer::WorldToView(worldOff, false, eyeIndex);

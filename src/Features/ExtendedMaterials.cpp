@@ -1,11 +1,13 @@
 #include "ExtendedMaterials.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <imgui.h>
 
 #include "Deferred.h"
 #include "State.h"
+#include "Util.h"
 #include "Utils/D3D.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -260,7 +262,6 @@ void ExtendedMaterials::CompileSSDMComputeShadersIfNeeded()
 	const std::vector<std::pair<const char*, const char*>> defines{};
 
 	if (!ssdmBuildPyramidCS || !ssdmSolveCS) {
-		// Drop any partial state from a previous failed load so we never run solve with stale coarser mips.
 		ssdmBuildPyramidCS = nullptr;
 		ssdmSolveCS = nullptr;
 
@@ -306,10 +307,16 @@ void ExtendedMaterials::DrawSSDM()
 	if (!deferred || !deferred->pointSampler)
 		return;
 
-	const UINT fullW = texDisplacement->desc.Width;
-	const UINT fullH = texDisplacement->desc.Height;
+	const UINT bufW = texDisplacement->desc.Width;
+	const UINT bufH = texDisplacement->desc.Height;
+	const float2 dynRes = Util::ConvertToDynamic(float2{ static_cast<float>(bufW), static_cast<float>(bufH) });
+	const UINT surfaceW = std::min(bufW, std::max(1u, static_cast<UINT>(std::ceil(static_cast<double>(dynRes.x) - 1e-4))));
+	const UINT surfaceH = std::min(bufH, std::max(1u, static_cast<UINT>(std::ceil(static_cast<double>(dynRes.y) - 1e-4))));
 
-	ID3D11ShaderResourceView* duvSRV = texDisplacement->srv.get();
+	const Util::DispatchCount solveDispatch = Util::GetScreenDispatchCount(true);
+
+	const float z[4] = { 0.f, 0.f, 0.f, 0.f };
+	context->ClearUnorderedAccessViewFloat(texSSDM->uav.get(), z);
 
 	for (int dstMip = 1; dstMip < SSDM_MIP_LEVELS; ++dstMip) {
 		const int srcMip = dstMip - 1;
@@ -318,8 +325,8 @@ void ExtendedMaterials::DrawSSDM()
 		ID3D11UnorderedAccessView* dstUav = uavDisplacement[dstMip].get();
 		context->CSSetUnorderedAccessViews(0, 1, &dstUav, nullptr);
 		context->CSSetShader(ssdmBuildPyramidCS.get(), nullptr, 0);
-		const UINT mw = std::max(1u, fullW >> dstMip);
-		const UINT mh = std::max(1u, fullH >> dstMip);
+		const UINT mw = std::max(1u, bufW >> dstMip);
+		const UINT mh = std::max(1u, bufH >> dstMip);
 		context->Dispatch((mw + 7u) / 8u, (mh + 7u) / 8u, 1);
 	}
 
@@ -329,24 +336,31 @@ void ExtendedMaterials::DrawSSDM()
 	context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 
 	SSDMSolveCB solveData{};
-	solveData.fullWidth = static_cast<float>(fullW);
-	solveData.fullHeight = static_cast<float>(fullH);
-	solveData.rcpFullWidth = fullW ? 1.0f / static_cast<float>(fullW) : 0.0f;
-	solveData.rcpFullHeight = fullH ? 1.0f / static_cast<float>(fullH) : 0.0f;
-	solveData.numMips = SSDM_MIP_LEVELS;
-	solveData.numIters = 8;
+	solveData.surfaceWidth = static_cast<float>(surfaceW);
+	solveData.surfaceHeight = static_cast<float>(surfaceH);
+	solveData.bufferWidth = static_cast<float>(bufW);
+	solveData.bufferHeight = static_cast<float>(bufH);
+	solveData.rcpBufferWidth = bufW ? 1.0f / static_cast<float>(bufW) : 0.0f;
+	solveData.rcpBufferHeight = bufH ? 1.0f / static_cast<float>(bufH) : 0.0f;
 	solveData.maxStepUv = 0.35f;  // Keep in sync with ExtendedMaterials.hlsli kSSDMDuvClampAbs (forward duv clamp).
 	solveData.damping = 0.62f;
+	solveData.numMips = SSDM_MIP_LEVELS;
+	solveData.numIters = 8;
+	solveData.pad0 = solveData.pad1 = solveData.pad2 = solveData.pad3 = solveData.pad4 = solveData.pad5 = 0;
 	cbufSSDMSolve->Update(solveData);
+
 	ID3D11Buffer* cbSolve = cbufSSDMSolve->CB();
 	context->CSSetConstantBuffers(0, 1, &cbSolve);
+	ID3D11ShaderResourceView* duvSRV = texDisplacement->srv.get();
 	context->CSSetShaderResources(0, 1, &duvSRV);
 	ID3D11SamplerState* solveSamplers[] = { deferred->pointSampler };
 	context->CSSetSamplers(0, 1, solveSamplers);
-	ID3D11UnorderedAccessView* outUav = texSSDM->uav.get();
-	context->CSSetUnorderedAccessViews(0, 1, &outUav, nullptr);
+	{
+		ID3D11UnorderedAccessView* uavSolve = texSSDM->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uavSolve, nullptr);
+	}
 	context->CSSetShader(ssdmSolveCS.get(), nullptr, 0);
-	context->Dispatch((fullW + 7u) / 8u, (fullH + 7u) / 8u, 1);
+	context->Dispatch(solveDispatch.x, solveDispatch.y, 1);
 
 	context->CSSetShader(nullptr, nullptr, 0);
 	context->CSSetShaderResources(0, 1, &nullSrv);
