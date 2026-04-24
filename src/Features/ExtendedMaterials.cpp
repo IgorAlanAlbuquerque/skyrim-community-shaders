@@ -342,7 +342,7 @@ void ExtendedMaterials::DrawSSDM()
 	solveData.bufferHeight = static_cast<float>(bufH);
 	solveData.rcpBufferWidth = bufW ? 1.0f / static_cast<float>(bufW) : 0.0f;
 	solveData.rcpBufferHeight = bufH ? 1.0f / static_cast<float>(bufH) : 0.0f;
-	solveData.maxStepUv = 0.35f;  // Keep in sync with ExtendedMaterials.hlsli kSSDMDuvClampAbs (forward duv clamp).
+	solveData.maxStepUv = 0.35f;  // Picard iteration step clamp for numerical stability.
 	solveData.damping = 0.62f;
 	solveData.numMips = SSDM_MIP_LEVELS;
 	solveData.numIters = 8;

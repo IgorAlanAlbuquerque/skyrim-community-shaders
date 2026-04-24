@@ -345,47 +345,10 @@ namespace ExtendedMaterials
 
 #endif
 
-	// Keep in sync with ExtendedMaterials.cpp SSDMSolveCB.maxStepUv (Picard step clamp).
-	static const float kSSDMDuvClampAbs = 0.35;
-	// Near-plane clip leaves tMax tiny on silhouettes → huge duv discontinuities; treat as no SSDM.
-	static const float kSSDMClipTMaxMin = 0.1;
-
-	// Shorten view-space offset along the same ray so [p, p+o] stays in a valid homogeneous clip band, then
-	// duv = ViewToUV(p+o') - ViewToUV(p). Fixes perspective divide foldover (mirror pixels) without arbitrary |duv| caps.
-	float3 ClipViewOffsetForValidProjection(float3 viewPosVS, float3 offsetVS, uint eyeIndex, out float2 duv, out float tMaxUsed)
-	{
-		row_major float4x4 P = FrameBuffer::CameraProj[eyeIndex];
-		float4 h0 = mul(P, float4(viewPosVS, 1.0));
-		float4 dh = mul(P, float4(offsetVS, 0.0));
-		float w0 = h0.w;
-		float dw = dh.w;
-		float wMin = max(5e-5, 1e-4 * abs(w0));
-
-		float tMax = 1.0;
-		if (w0 < wMin) {
-			tMax = 0.0;
-		} else {
-			float w1 = w0 + dw;
-			if (w1 < wMin) {
-				if (dw < -1e-12) {
-					tMax = saturate((wMin - w0) / dw);
-					tMax *= 0.9995;
-				} else {
-					tMax = 0.0;
-				}
-			}
-		}
-
-		tMaxUsed = tMax;
-		float3 o = offsetVS * tMax;
-		duv = FrameBuffer::ViewToUV(viewPosVS + o, true, eyeIndex) - FrameBuffer::ViewToUV(viewPosVS, true, eyeIndex);
-		return o;
-	}
-
 	// POM-style tangent step (Vt.xy / |Vt.z|) then world-space offset and projection.
 	// Callers pass surface → camera (Lighting `viewDirection`, or `refractedViewDirection` for coated PBR).
 	void ComputeDisplacementDuvAndOffsetVS(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
-		float height, float displacementScale, uint eyeIndex, out float2 duv, out float clipTMax)
+		float height, float displacementScale, uint eyeIndex, out float2 duv)
 	{
 		float h = height;
 
@@ -414,26 +377,14 @@ namespace ExtendedMaterials
 
 		float3 worldOff = -(Tw * parallaxDir.x + Bw * parallaxDir.y) * amp;
 		float3 offsetFull = FrameBuffer::WorldToView(worldOff, false, eyeIndex);
-		ClipViewOffsetForValidProjection(viewPosVS, offsetFull, eyeIndex, duv, clipTMax);
+		duv = FrameBuffer::ViewToUV(viewPosVS + offsetFull, true, eyeIndex) - FrameBuffer::ViewToUV(viewPosVS, true, eyeIndex);
 	}
 
 	float2 ComputeDisplacementVector(float3 viewPosVS, float3 viewDirWorld, float3 tbnTr0, float3 tbnTr1, float3 tbnTr2,
-		float height, float displacementScale, uint eyeIndex, out float ssdmForwardCoverage)
+		float height, float displacementScale, uint eyeIndex)
 	{
 		float2 duv;
-		float clipTMax;
-		ComputeDisplacementDuvAndOffsetVS(viewPosVS, viewDirWorld, tbnTr0, tbnTr1, tbnTr2, height, displacementScale, eyeIndex, duv, clipTMax);
-
-		// Do not scale duv by view angle here — that flattens grazing silhouettes. |duv| clamp + clip + solve/composite gates handle smear.
-		if (clipTMax < kSSDMClipTMaxMin) {
-			duv = 0.0;
-			ssdmForwardCoverage = 0.0;
-		} else {
-			ssdmForwardCoverage = 1.0;
-			float len = length(duv);
-			if (len > kSSDMDuvClampAbs)
-				duv *= kSSDMDuvClampAbs / len;
-		}
+		ComputeDisplacementDuvAndOffsetVS(viewPosVS, viewDirWorld, tbnTr0, tbnTr1, tbnTr2, height, displacementScale, eyeIndex, duv);
 		return duv;
 	}
 }
