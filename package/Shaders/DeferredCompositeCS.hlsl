@@ -122,14 +122,21 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	uint2 gbufferCoord = dispatchID.xy;
 #if defined(SSDM)
 	{
+		float2 uvBuf = (float2(dispatchID.xy) + 0.5) * SharedData::BufferDim.zw;
 		float4 ssdmSample = SSDMOffsetTexture[dispatchID.xy];
 		float2 sourceUV = ssdmSample.xy;
 		float ssdmValid = ssdmSample.z;
 		float ssdmCoverage = ssdmSample.w;
+		// Derive border guard from actual remap reach (in pixels) plus one pixel for safe bilinear footprint.
+		float2 remapPx = ceil(abs((sourceUV - uvBuf) * SharedData::BufferDim.xy));
+		float2 guardPx = max(remapPx, 1.0.xx);
+		float2 guardUV = guardPx * SharedData::BufferDim.zw;
+		bool dstInsideGuard = all(uvBuf > guardUV && uvBuf < (1.0 - guardUV));
+		bool srcInsideGuard = all(sourceUV > guardUV && sourceUV < (1.0 - guardUV));
 		// Do not use SharedData::ConvertUVToSampleCoord — that path expects per-eye mono UV (then
 		// stereo-packs + DR-adjusts) like depth reads from ViewToUV; applying it here double-packs
 		// VR and skews flat/DR, which reads the wrong gbuffer columns (split / ghost image).
-		bool allowRemap = depth < 1.0 && ssdmValid > 0.5 && ssdmCoverage > 0.0;
+		bool allowRemap = depth < 1.0 && ssdmValid > 0.5 && ssdmCoverage > 0.0 && dstInsideGuard && srcInsideGuard;
 		if (allowRemap) {
 			uint2 remapCoord = uint2(clamp(sourceUV.xy * SharedData::BufferDim.xy, float2(0, 0), SharedData::BufferDim.xy - 1.0));
 			float depthRemap = DepthTexture[remapCoord];
