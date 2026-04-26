@@ -5,6 +5,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
+#include "Utils/D3D.h"
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
@@ -130,9 +131,11 @@ void Deferred::SetupResources()
 		samplerDesc.MinLOD = 0;
 		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &linearSampler));
+		Util::SetResourceName(linearSampler, "Deferred::LinearSampler");
 
 		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointSampler));
+		Util::SetResourceName(pointSampler, "Deferred::PointSampler");
 	}
 
 	{
@@ -166,7 +169,7 @@ void Deferred::SetupResources()
 		srvDesc.Buffer.NumElements = 1;
 
 		delete directionalShadowLights;
-		directionalShadowLights = new Buffer(sbDesc);
+		directionalShadowLights = new Buffer(sbDesc, nullptr, "Deferred::DirectionalShadowLights");
 		directionalShadowLights->CreateSRV(srvDesc);
 	}
 }
