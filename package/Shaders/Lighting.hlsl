@@ -1044,7 +1044,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 complexSpecular = 1.0;  // Declare complexSpecular at a higher scope so it's available throughout the shader (NEEDED FOR STOCH. FIX)
 
 #	if defined(EMAT)
-#		if defined(PARALLAX)
+#		if defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 	if (SharedData::extendedMaterialSettings.EnableParallax) {
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
 		float height = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
@@ -1052,7 +1052,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 normalVS = normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
 		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, normalVS, height - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
 	}
-#		endif  // PARALLAX
+#		endif  // defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 
 	bool complexMaterial = false;
 	bool complexMaterialParallax = false;
