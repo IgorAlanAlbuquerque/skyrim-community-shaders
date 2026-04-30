@@ -377,22 +377,22 @@ void Deferred::DeferredPasses()
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
 		ID3D11ShaderResourceView* srvs[16]{
-			specular.SRV,
-			albedo.SRV,
-			normalRoughness.SRV,
-			masks.SRV,
-			dynamicCubemaps.loaded || REL::Module::IsVR() ? Util::GetCurrentSceneDepthSRV(true) : nullptr,
-			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,
-			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,
-			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,
-			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,
-			nullptr,  // t9: unused
-			ssgi_ao,
-			ssgi_hq_spec ? nullptr : ssgi_y,
-			ssgi_hq_spec ? nullptr : ssgi_cocg,
-			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
-			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,
-			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,
+			specular.SRV,                                                                                    // t0  SpecularTexture
+			albedo.SRV,                                                                                      // t1  AlbedoTexture
+			normalRoughness.SRV,                                                                             // t2  NormalRoughnessTexture
+			masks.SRV,                                                                                       // t3  MasksTexture
+			dynamicCubemaps.loaded || REL::Module::IsVR() ? Util::GetCurrentSceneDepthSRV(false) : nullptr,  // t4  DepthTexture (24/32-bit; HLSL type baked at compile via TERRAIN_BLENDING)
+			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                              // t5  ReflectanceTexture
+			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                        // t6  EnvTexture
+			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,             // t7  EnvReflectionsTexture
+			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,   // t8  SkylightingProbeArray
+			nullptr,                                                                                         // t9  unused
+			ssgi_ao,                                                                                         // t10 SsgiAoTexture
+			ssgi_hq_spec ? nullptr : ssgi_y,                                                                 // t11 SsgiYTexture
+			ssgi_hq_spec ? nullptr : ssgi_cocg,                                                              // t12 SsgiCoCgTexture
+			ssgi_hq_spec ? ssgi_gi_spec : nullptr,                                                           // t13 SsgiSpecularTexture
+			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                             // t14 EnvIBLTexture
+			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                             // t15 SkyIBLTexture
 		};
 
 		if (dynamicCubemaps.loaded)
