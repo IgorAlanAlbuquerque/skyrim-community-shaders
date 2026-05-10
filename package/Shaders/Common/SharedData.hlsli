@@ -211,7 +211,6 @@ namespace SharedData
 	struct LinearLightingSettings
 	{
 		uint enableLinearLighting;
-		uint enableGammaCorrection;
 		uint isDirLightLinear;
 		float dirLightMult;
 		float lightGamma;
@@ -238,6 +237,7 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
+		uint pad0;
 	};
 
 	struct TerrainBlendingSettings
