@@ -1066,7 +1066,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::extendedMaterialSettings.EnableComplexMaterial) {
 		const float kMaskEpsilon = (4.0 / 255.0);
 
-		complexMaterial = envMaskSample.w < (1.0 - kMaskEpsilon);
+		complexMaterial = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, 15).w < (1.0 - kMaskEpsilon);
 
 		// Detect texture saved in the wrong format
 		if ((abs(envMaskSample.x - envMaskSample.y) < kMaskEpsilon) &&
@@ -1075,7 +1075,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			complexMaterial = false;
 
 		if (complexMaterial) {
-			if (envMaskSample.w > kMaskEpsilon) {
+			if (envMaskSample.w > kMaskEpsilon && envMaskSample.w < (1.0 - kMaskEpsilon)) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
 				float cmHeight = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
