@@ -139,6 +139,8 @@ void Deferred::SetupResources()
 		Util::SetResourceName(pointSampler, "Deferred::PointSampler");
 	}
 
+	// Directional shadow structured buffer (t98): CPU-written each frame, read-only on GPU.
+	// One element holds the sun cascade data uploaded from BSShadowDirectionalLight.
 	{
 		D3D11_TEXTURE2D_DESC texDesc;
 		auto& mainRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
