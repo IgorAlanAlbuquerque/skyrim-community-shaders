@@ -19,6 +19,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/RenderDoc.h"
+#include "Features/ScreenSpaceDisplacementMapping.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
@@ -217,6 +218,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::grassCollision,
 		&globals::features::screenSpaceShadows,
 		&globals::features::extendedMaterials,
+		&globals::features::screenSpaceDisplacementMapping,
 		&globals::features::wetnessEffects,
 		&globals::features::lightLimitFix,
 		&globals::features::dynamicCubemaps,

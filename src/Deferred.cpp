@@ -8,6 +8,7 @@
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
+#include "Features/ScreenSpaceDisplacementMapping.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -217,6 +218,10 @@ void Deferred::PrepassPasses()
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
 	Feature::ForEachLoadedFeature("Prepass", [](Feature* feature) { feature->Prepass(); }, true);
+
+	auto& ssdm = globals::features::screenSpaceDisplacementMapping;
+	if (ssdm.loaded)
+		ssdm.DrawSSDM();
 }
 
 void Deferred::StartDeferred()
