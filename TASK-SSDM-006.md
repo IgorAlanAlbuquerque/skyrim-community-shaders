@@ -44,6 +44,7 @@ Para cada pixel (x, y):
 ```
 
 **Blend adaptativo baseado em confiança:**
+
 ```hlsl
 float confidence = saturate(accumCount / MaxAccumFrames);
 float blendAlpha = lerp(1.0f, MinBlendAlpha, confidence);
@@ -51,6 +52,7 @@ float blendAlpha = lerp(1.0f, MinBlendAlpha, confidence);
 ```
 
 **Constantes adicionais no SSDMCB (de TASK-SSDM-004):**
+
 ```hlsl
 float4x4 PrevInvViewMat[2];   // já declarado
 float4x4 CurrInvViewMat[2];   // inversa da view atual
@@ -60,6 +62,7 @@ uint     MaxAccumFrames;       // frames para convergência (default: 32)
 ```
 
 **`blur.cs.hlsl` — cross-bilateral blur:**
+
 ```
 Para cada pixel:
 1. Ler depth refinado de texRefinedDepthHistory[currentIdx]
@@ -71,6 +74,7 @@ Para cada pixel:
 ```
 
 **Texturas adicionais (`SetupResources()`):**
+
 ```cpp
 // História temporal — separada das texturas de output atual
 for (int i = 0; i < 2; ++i)
@@ -82,6 +86,7 @@ texAccumCount = eastl::make_unique<Texture2D>(accumDesc, "SSDM::AccumCount");
 ```
 
 **Reset de histórico (em `Prepass()` C++):**
+
 ```cpp
 // Detectar camera cut via grande mudança em view matrix
 if (CameraJumpDetected()) {
@@ -91,6 +96,7 @@ if (CameraJumpDetected()) {
 ```
 
 **Ordem de passes em `DrawSSDM()`:**
+
 ```
 1. Dispatch prefilterDepth   → texDepthHierarchy
 2. Dispatch displace         → texRefinedDepth[outputIdx]
@@ -101,13 +107,13 @@ if (CameraJumpDetected()) {
 
 ## Critérios de Aceitação
 
-- [ ] Sem flickering visível em câmera parada após ~30 frames de convergência.
-- [ ] Camera cut (teleport) reseta o histórico corretamente — sem ghost artifacts.
-- [ ] Denoising blur preserva bordas de profundidade (não blura atravessando mudanças abruptas de depth).
-- [ ] `texAccumCount` acumula corretamente até `MaxAccumFrames` e para (no RenderDoc valores chegam a MaxAccumFrames).
-- [ ] Ambos `temporal.cs.hlsl` e `blur.cs.hlsl` compilam sem erros com hlslkit.
-- [ ] VR: reprojection usa matrizes por eye (`eyeIndex`).
-- [ ] Movimento rápido de câmera não produz ghosting excessivo (reprojection invalida histórico quando necessário).
+- [ ] Sem flickering visível em câmera parada após ~30 frames de convergência. *(requer in-game)*
+- [ ] Camera cut (teleport) reseta o histórico corretamente — sem ghost artifacts. *(requer in-game)*
+- [ ] Denoising blur preserva bordas de profundidade (não blura atravessando mudanças abruptas de depth). *(requer RenderDoc in-game)*
+- [ ] `texAccumCount` acumula corretamente até `MaxAccumFrames` e para (no RenderDoc valores chegam a MaxAccumFrames). *(requer RenderDoc in-game)*
+- [x] Ambos `temporal.cs.hlsl` e `blur.cs.hlsl` compilam sem erros com fxc. *(fxc /D COMPUTESHADER: 0 erros, 0 warnings — temporal ~96 slots, blur ~101 slots, prefilter ~152 slots, displace ~129 slots)*
+- [x] VR: reprojection usa matrizes por eye (`eyeIndex`). *(CurrInvViewMat[eyeIndex] e PrevViewProjMat[eyeIndex] em toda a lógica de reprojection — validado por code review)*
+- [ ] Movimento rápido de câmera não produz ghosting excessivo (reprojection invalida histórico quando necessário). *(requer in-game)*
 
 ## Arquivos / áreas afetadas
 

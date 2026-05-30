@@ -24,11 +24,13 @@ A lógica de escrita da altura no render target é implementada em TASK-SSDM-003
 ## Detalhes técnicos
 
 **Dimensões do render target:**
+
 - Mesmas do backbuffer (render width × render height)
 - Formato: `DXGI_FORMAT_R16_FLOAT` — suficiente para altura normalizada [0.0, 1.0]
 - Sem mips (único nível)
 
 **Nomeação de recurso (obrigatório per CLAUDE.md):**
+
 ```cpp
 texHeightGBuffer = eastl::make_unique<Texture2D>(desc, "ExtendedMaterials::HeightGBuffer");
 ```
@@ -37,13 +39,16 @@ texHeightGBuffer = eastl::make_unique<Texture2D>(desc, "ExtendedMaterials::Heigh
 O render target deve ser atachado como `RTV[slot_adicional]` durante o draw de geometria com parallax ativo. Isto requer identificar onde `ExtendedMaterials` já faz hooks no pipeline e adicionar o bind nesse ponto.
 
 **Clear por frame:**
+
 ```cpp
 float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
 context->ClearRenderTargetView(texHeightGBuffer->rtv.get(), clearColor);
 ```
+
 Fazer o clear em `Prepass()` antes do draw de geometria.
 
 **Descriptor de criação:**
+
 ```cpp
 D3D11_TEXTURE2D_DESC desc{
     .Width  = width,

@@ -24,6 +24,7 @@ Criar o esqueleto completo da feature `ScreenSpaceDisplacementMapping` em C++, s
 ## Detalhes técnicos
 
 **`ScreenSpaceDisplacementMapping.h`** deve conter:
+
 - Herança de `Feature`
 - Struct `Settings` com `alignas(16)` contendo todos os parâmetros (ver TASK-SSDM-008)
 - Membros `eastl::unique_ptr<Texture2D>` para as texturas de output (pelo menos `texRefinedDepth[2]`)
@@ -36,10 +37,13 @@ Criar o esqueleto completo da feature `ScreenSpaceDisplacementMapping` em C++, s
 - Override de `GetCategory()` retornando `FeatureCategories::kMaterials`
 
 **`src/Globals.h`** — adicionar antes do namespace `features`:
+
 ```cpp
 struct ScreenSpaceDisplacementMapping;
 ```
+
 E dentro do `namespace globals::features`:
+
 ```cpp
 extern ScreenSpaceDisplacementMapping screenSpaceDisplacementMapping;
 ```
@@ -47,12 +51,14 @@ extern ScreenSpaceDisplacementMapping screenSpaceDisplacementMapping;
 **`src/Feature.cpp`** — adicionar ao vetor de `GetFeatureList()` após `extendedMaterials`.
 
 **`.ini` file** (`features/Screen-Space Displacement Mapping/Shaders/Features/ScreenSpaceDisplacementMapping.ini`):
+
 ```ini
 [Info]
 Version = 0-1-0
 ```
 
 **`src/Deferred.cpp`** — adicionar ao final de `PrepassPasses()`:
+
 ```cpp
 auto& ssdm = globals::features::screenSpaceDisplacementMapping;
 if (ssdm.loaded)

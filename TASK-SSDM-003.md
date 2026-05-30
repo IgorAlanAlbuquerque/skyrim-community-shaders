@@ -25,6 +25,7 @@ Modificar o shader de material (`package/Shaders/Lighting.hlsl`) para escrever o
 Procurar pela macro `COMPLEX_PARALLAX` ou `PARALLAX` e identificar onde `parallaxOffset` ou `heightMap` é amostrado. O valor de altura bruto (antes de escalar para UV offset) é o que deve ser escrito.
 
 **Adição ao pixel shader output struct:**
+
 ```hlsl
 #if defined(COMPLEX_PARALLAX) && defined(SSDM_HEIGHT_OUTPUT)
     float parallaxHeight : SV_Target[N];  // N = slot do HeightGBuffer
@@ -32,6 +33,7 @@ Procurar pela macro `COMPLEX_PARALLAX` ou `PARALLAX` e identificar onde `paralla
 ```
 
 **Escrita no output:**
+
 ```hlsl
 #if defined(COMPLEX_PARALLAX) && defined(SSDM_HEIGHT_OUTPUT)
     psout.parallaxHeight = heightSample;  // valor raw [0.0, 1.0] do height map
@@ -43,9 +45,11 @@ A define `SSDM_HEIGHT_OUTPUT` deve ser adicionada pelo `ShaderCache` apenas quan
 
 **Slot do render target:**
 Definir constante em `src/Features/ScreenSpaceDisplacementMapping.h`:
+
 ```cpp
 static constexpr uint32_t kHeightGBufferRTVSlot = 7;  // Verificar slots livres
 ```
+
 E usar o mesmo valor tanto no C++ (bind do RTV) quanto no shader (`SV_Target7`).
 
 ## Critérios de Aceitação

@@ -42,6 +42,7 @@ bool SSDMDepthTest(float sampleDepth, float rayDepth, float thickness);
 Estas funções devem ser implementadas com base nos equivalentes de `features/Screen Space GI/Shaders/ScreenSpaceGI/common.hlsli` (`ScreenToViewPosition`, `ScreenToViewDepth`, etc.).
 
 **Constante buffer do SSDM (cbuffer b1):**
+
 ```hlsl
 cbuffer SSDMCB : register(b1)
 {
@@ -62,6 +63,7 @@ cbuffer SSDMCB : register(b1)
 ```
 
 **`prefilterDepth.cs.hlsl`:**
+
 - Input: depth buffer scene (SRV)
 - Output: textura de depth com mip chain (UAV com slices)
 - Algoritmo: para cada mip, tomar o máximo de depth dos 4 texels do mip anterior (depth conservativo — garante que o raymarching não passe por geometria)
@@ -69,6 +71,7 @@ cbuffer SSDMCB : register(b1)
 - Dispatch: uma pass por mip level (5 passes para textura 1/2 res → 1/32 res)
 
 **Textura de depth hierárquico (C++ — `SetupResources()`):**
+
 ```cpp
 D3D11_TEXTURE2D_DESC desc{
     .Width     = halfWidth,

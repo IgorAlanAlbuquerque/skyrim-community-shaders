@@ -24,6 +24,7 @@ Esta task também finaliza a integração no `Deferred.cpp`, garantindo que a or
 ## Detalhes técnicos
 
 **Ordem de passes no pipeline deferred (Deferred.cpp):**
+
 ```
 [Geometry Pass]          ← ExtendedMaterials escreve HeightGBuffer aqui
 [Prepass]
@@ -39,6 +40,7 @@ Esta task também finaliza a integração no `Deferred.cpp`, garantindo que a or
 ```
 
 **Integração em Deferred.cpp `PrepassPasses()`:**
+
 ```cpp
 // SSDM deve rodar antes de SSGI para fornecer depth refinado
 auto& ssdm = globals::features::screenSpaceDisplacementMapping;
@@ -56,6 +58,7 @@ if (ssgi.loaded) {
 ```
 
 **Modificação em ScreenSpaceGI:**
+
 - Adicionar parâmetro opcional `ID3D11ShaderResourceView* refinedDepthSRV = nullptr` em `DrawSSGI()`.
 - Se `refinedDepthSRV != nullptr`, bind como `t_additional` no compute shader de GI.
 - No shader `gi.cs.hlsl`: se o SRV adicional está bound (verificar via constante bool no CB), usar depth refinado no raymarching de GI em vez do depth raw.
@@ -64,6 +67,7 @@ if (ssgi.loaded) {
 Em vez de modificar `ScreenSpaceGI`, usar o depth refinado como um replacement do depth buffer na textura de depth que SSGI já lê. Isso requer bind do depth refinado no slot que SSGI usa para depth, o que pode ser feito substituindo o SRV na lista de binds de `DrawSSGI()`.
 
 **`GetFinalRefinedDepthSRV()` em ScreenSpaceDisplacementMapping:**
+
 ```cpp
 ID3D11ShaderResourceView* GetFinalRefinedDepthSRV()
 {

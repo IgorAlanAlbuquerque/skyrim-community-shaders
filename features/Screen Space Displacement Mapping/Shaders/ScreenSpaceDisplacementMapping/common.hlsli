@@ -8,9 +8,11 @@
 // C++ float2[2] maps to HLSL float4 (same 16-byte layout, xy=eye0, zw=eye1).
 cbuffer SSDMCB : register(b1)
 {
-	float4x4 PrevInvViewMat[2];
-	float4   NDCToViewMul;       // xy = eye 0, zw = eye 1
-	float4   NDCToViewAdd;       // xy = eye 0, zw = eye 1
+	float4x4 PrevInvViewMat[2];   // previous frame cam-to-world (for disocclusion validation)
+	float4x4 CurrInvViewMat[2];   // current frame cam-to-world  (view-space → world)
+	float4x4 PrevViewProjMat[2];  // previous frame view × proj   (world → prev clip, for reprojection)
+	float4   NDCToViewMul;        // xy = eye 0, zw = eye 1
+	float4   NDCToViewAdd;        // xy = eye 0, zw = eye 1
 	float2   TexDim;
 	float2   RcpTexDim;
 	float2   FrameDim;

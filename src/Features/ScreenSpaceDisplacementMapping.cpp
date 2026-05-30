@@ -156,6 +156,55 @@ void ScreenSpaceDisplacementMapping::SetupResources()
 		}
 	}
 
+	// ---- Temporal history (ping-pong, R32_FLOAT, same dims as texRefinedDepth) ---
+	{
+		D3D11_TEXTURE2D_DESC texDesc{
+			.Width      = mainDesc.Width,
+			.Height     = mainDesc.Height,
+			.MipLevels  = 1,
+			.ArraySize  = 1,
+			.Format     = DXGI_FORMAT_R32_FLOAT,
+			.SampleDesc = { .Count = 1, .Quality = 0 },
+			.Usage      = D3D11_USAGE_DEFAULT,
+			.BindFlags  = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+		};
+		for (int i = 0; i < 2; ++i) {
+			auto name = fmt::format("SSDM::RefinedDepthHistory{}", i);
+			texRefinedDepthHistory[i] = eastl::make_unique<Texture2D>(texDesc, name.c_str());
+			texRefinedDepthHistory[i]->CreateSRV({
+				.Format        = DXGI_FORMAT_R32_FLOAT,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D     = { .MostDetailedMip = 0, .MipLevels = 1 } });
+			texRefinedDepthHistory[i]->CreateUAV({
+				.Format        = DXGI_FORMAT_R32_FLOAT,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D     = { .MipSlice = 0 } });
+		}
+	}
+
+	// ---- Per-pixel accumulation counter (R8_UINT, [0..MaxAccumFrames]) ------
+	{
+		D3D11_TEXTURE2D_DESC texDesc{
+			.Width      = mainDesc.Width,
+			.Height     = mainDesc.Height,
+			.MipLevels  = 1,
+			.ArraySize  = 1,
+			.Format     = DXGI_FORMAT_R8_UINT,
+			.SampleDesc = { .Count = 1, .Quality = 0 },
+			.Usage      = D3D11_USAGE_DEFAULT,
+			.BindFlags  = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+		};
+		texAccumCount = eastl::make_unique<Texture2D>(texDesc, "SSDM::AccumCount");
+		texAccumCount->CreateSRV({
+			.Format        = DXGI_FORMAT_R8_UINT,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D     = { .MostDetailedMip = 0, .MipLevels = 1 } });
+		texAccumCount->CreateUAV({
+			.Format        = DXGI_FORMAT_R8_UINT,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D     = { .MipSlice = 0 } });
+	}
+
 	// ---- Constant buffer ----------------------------------------------------
 	ssdmCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<SSDMCB>());
 
@@ -166,7 +215,10 @@ void ScreenSpaceDisplacementMapping::ClearShaderCache()
 {
 	csPrefilterDepth = nullptr;
 	csDisplace       = nullptr;
+	csTemporal       = nullptr;
+	csBlur           = nullptr;
 	recompileFlag    = true;
+	firstFrameTemporal = true;
 
 	const auto shaderDir = std::filesystem::path("Data\\Shaders\\ScreenSpaceDisplacementMapping");
 
@@ -177,24 +229,37 @@ void ScreenSpaceDisplacementMapping::ClearShaderCache()
 	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(
 			Util::CompileShader((shaderDir / "displace.cs.hlsl").c_str(), {}, "cs_5_0")))
 		csDisplace.attach(raw);
+
+	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(
+			Util::CompileShader((shaderDir / "temporal.cs.hlsl").c_str(), {}, "cs_5_0")))
+		csTemporal.attach(raw);
+
+	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(
+			Util::CompileShader((shaderDir / "blur.cs.hlsl").c_str(), {}, "cs_5_0")))
+		csBlur.attach(raw);
 }
 
 void ScreenSpaceDisplacementMapping::UpdateSSDMCB()
 {
 	static float4x4 prevInvView[2] = {};
+	static float4x4 prevViewMat[2] = {};
 
 	SSDMCB data{};
 	const int numEyes = 1 + REL::Module::IsVR();
 	for (int eyeIndex = 0; eyeIndex < numEyes; ++eyeIndex) {
-		auto eye = Util::GetCameraData(eyeIndex);
+		auto     eye        = Util::GetCameraData(eyeIndex);
+		float4x4 currInvView = eye.viewMat.Invert();
 
-		data.PrevInvViewMat[eyeIndex] = prevInvView[eyeIndex];
-		data.NDCToViewMul[eyeIndex]   = { 2.0f / eye.projMat(0, 0), -2.0f / eye.projMat(1, 1) };
-		data.NDCToViewAdd[eyeIndex]   = { -1.0f / eye.projMat(0, 0), 1.0f / eye.projMat(1, 1) };
+		data.PrevInvViewMat[eyeIndex]  = prevInvView[eyeIndex];
+		data.CurrInvViewMat[eyeIndex]  = currInvView;
+		data.PrevViewProjMat[eyeIndex] = prevViewMat[eyeIndex] * eye.projMat;
+		data.NDCToViewMul[eyeIndex]    = { 2.0f / eye.projMat(0, 0), -2.0f / eye.projMat(1, 1) };
+		data.NDCToViewAdd[eyeIndex]    = { -1.0f / eye.projMat(0, 0), 1.0f / eye.projMat(1, 1) };
 		if (REL::Module::IsVR())
 			data.NDCToViewMul[eyeIndex].x *= 2.0f;
 
-		prevInvView[eyeIndex] = eye.viewMat.Invert();
+		prevInvView[eyeIndex] = currInvView;
+		prevViewMat[eyeIndex] = eye.viewMat;
 	}
 
 	const float2 texDim   = { (float)texDepthHierarchy->desc.Width,
@@ -221,6 +286,17 @@ void ScreenSpaceDisplacementMapping::UpdateSSDMCB()
 	ssdmCB->Update(data);
 }
 
+bool ScreenSpaceDisplacementMapping::CameraJumpDetected()
+{
+	auto     eye        = Util::GetCameraData(0);
+	float3   currPos    = eye.viewMat.Invert().Translation();
+	bool     jumped     = !firstFrameTemporal &&
+	                      (currPos - prevCameraPos).LengthSquared() > 100.0f;
+	prevCameraPos      = currPos;
+	firstFrameTemporal = false;
+	return jumped;
+}
+
 void ScreenSpaceDisplacementMapping::DrawSSDM()
 {
 	if (!loaded || !settings.Enabled)
@@ -230,21 +306,28 @@ void ScreenSpaceDisplacementMapping::DrawSSDM()
 
 	ZoneScoped;
 
-	auto context = globals::d3d::context;
+	auto context  = globals::d3d::context;
+	auto renderer = globals::game::renderer;
+	auto& em      = globals::features::extendedMaterials;
+
+	const uint w = texRefinedDepth[outputIdx] ? texRefinedDepth[outputIdx]->desc.Width  : 0;
+	const uint h = texRefinedDepth[outputIdx] ? texRefinedDepth[outputIdx]->desc.Height : 0;
 
 	// Update constant buffer with current frame data.
 	UpdateSSDMCB();
 
-	// Bind shared state used by both passes.
-	auto* cb       = ssdmCB->CB();
-	auto* sharedCB = globals::state->sharedDataCB->CB();
-	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetConstantBuffers(5, 1, &sharedCB);
+	// Bind shared state used by all passes.
+	{
+		auto* cb       = ssdmCB->CB();
+		auto* sharedCB = globals::state->sharedDataCB->CB();
+		context->CSSetConstantBuffers(1, 1, &cb);
+		context->CSSetConstantBuffers(5, 1, &sharedCB);
 
-	ID3D11SamplerState* samplers[] = { samplerPointClamp.get(), samplerLinearClamp.get() };
-	context->CSSetSamplers(0, 2, samplers);
+		ID3D11SamplerState* samplers[] = { samplerPointClamp.get(), samplerLinearClamp.get() };
+		context->CSSetSamplers(0, 2, samplers);
+	}
 
-	// --- Prefilter depth pyramid --------------------------------------------
+	// --- Pass 1: Prefilter depth pyramid ------------------------------------
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "SSDM - Prefilter Depth");
 
@@ -260,7 +343,6 @@ void ScreenSpaceDisplacementMapping::DrawSSDM()
 		context->CSSetUnorderedAccessViews(0, 5, uavs, nullptr);
 
 		context->CSSetShader(csPrefilterDepth.get(), nullptr, 0);
-		// Each thread covers a 2×2 mip-0 block → dispatch covers mip-1 dimensions.
 		context->Dispatch((halfW / 2 + 7) / 8, (halfH / 2 + 7) / 8, 1);
 
 		ID3D11ShaderResourceView*  nullSrv[1] = { nullptr };
@@ -269,18 +351,15 @@ void ScreenSpaceDisplacementMapping::DrawSSDM()
 		context->CSSetUnorderedAccessViews(0, 5, nullUav, nullptr);
 	}
 
-	// --- Ray-march displace pass -------------------------------------------
-	if (csDisplace && texRefinedDepth[outputIdx]) {
+	// --- Pass 2: Ray-march displace → texRefinedDepth[outputIdx] -----------
+	if (csDisplace && w > 0) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSDM - Displace");
 
-		auto  renderer = globals::game::renderer;
-		auto& em       = globals::features::extendedMaterials;
-
 		ID3D11ShaderResourceView* srvs[] = {
-			Util::GetCurrentSceneDepthSRV(),                                        // t0 raw NDC depth
-			renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV,          // t1 normals
-			em.loaded ? em.GetHeightGBufferSRV() : nullptr,                         // t2 parallax height
-			texDepthHierarchy->srv.get(),                                           // t3 depth pyramid
+			Util::GetCurrentSceneDepthSRV(),                               // t0 raw NDC depth
+			renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV, // t1 normals
+			em.loaded ? em.GetHeightGBufferSRV() : nullptr,                // t2 parallax height
+			texDepthHierarchy->srv.get(),                                  // t3 depth pyramid
 		};
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -288,8 +367,6 @@ void ScreenSpaceDisplacementMapping::DrawSSDM()
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		context->CSSetShader(csDisplace.get(), nullptr, 0);
-		const uint w = texRefinedDepth[outputIdx]->desc.Width;
-		const uint h = texRefinedDepth[outputIdx]->desc.Height;
 		context->Dispatch((w + 15) / 16, (h + 15) / 16, 1);
 
 		ID3D11ShaderResourceView*  nullSrvs[4] = {};
@@ -297,6 +374,80 @@ void ScreenSpaceDisplacementMapping::DrawSSDM()
 		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 	}
+
+	// --- Pass 3: Temporal accumulation → texRefinedDepthHistory[outputIdx] -
+	const bool doTemporal = settings.EnableTemporalStabilization && csTemporal &&
+	                        texRefinedDepthHistory[0] && texRefinedDepthHistory[1] && texAccumCount;
+	if (doTemporal) {
+		TracyD3D11Zone(globals::state->tracyCtx, "SSDM - Temporal");
+
+		// Clear accumulation counter on camera cuts to avoid ghost artifacts.
+		if (CameraJumpDetected()) {
+			uint clearVals[4] = {};
+			context->ClearUnorderedAccessViewUint(texAccumCount->uav.get(), clearVals);
+		}
+
+		const uint histIdx = 1u - outputIdx;
+		ID3D11ShaderResourceView* srvs[] = {
+			texRefinedDepth[outputIdx]->srv.get(),         // t0 current virtual depth
+			texRefinedDepthHistory[histIdx]->srv.get(),    // t1 previous temporal output
+			renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV, // t2 normals
+		};
+		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+		ID3D11UnorderedAccessView* uavs[] = {
+			texAccumCount->uav.get(),                    // u0 accumulation counter
+			texRefinedDepthHistory[outputIdx]->uav.get() // u1 temporal output
+		};
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+		context->CSSetShader(csTemporal.get(), nullptr, 0);
+		context->Dispatch((w + 15) / 16, (h + 15) / 16, 1);
+
+		ID3D11ShaderResourceView*  nullSrvs[3] = {};
+		ID3D11UnorderedAccessView* nullUavs[2] = {};
+		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
+	}
+
+	// --- Pass 4: Cross-bilateral blur → texRefinedDepth[outputIdx] (reuse) -
+	// Reads from history (temporal output), writes to the displace buffer (already consumed).
+	const bool doBlur = settings.EnableBlur && doTemporal && csBlur;
+	if (doBlur) {
+		TracyD3D11Zone(globals::state->tracyCtx, "SSDM - Blur");
+
+		ID3D11ShaderResourceView* srvs[] = {
+			texRefinedDepthHistory[outputIdx]->srv.get(),                  // t0 temporal output
+			renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV, // t1 normals
+		};
+		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+		ID3D11UnorderedAccessView* uav = texRefinedDepth[outputIdx]->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+
+		context->CSSetShader(csBlur.get(), nullptr, 0);
+		context->Dispatch((w + 15) / 16, (h + 15) / 16, 1);
+
+		ID3D11ShaderResourceView*  nullSrvs[2] = {};
+		ID3D11UnorderedAccessView* nullUav      = nullptr;
+		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+	}
+
+	// --- Track final SRV before ping-pong flip ------------------------------
+	// blur → texRefinedDepth[outputIdx]; temporal-only → texRefinedDepthHistory[outputIdx];
+	// displace-only → texRefinedDepth[outputIdx].
+	if (doBlur)
+		latestOutputSRV = texRefinedDepth[outputIdx]->srv.get();
+	else if (doTemporal)
+		latestOutputSRV = texRefinedDepthHistory[outputIdx]->srv.get();
+	else if (texRefinedDepth[outputIdx])
+		latestOutputSRV = texRefinedDepth[outputIdx]->srv.get();
+	else
+		latestOutputSRV = nullptr;
+
+	// Flip ping-pong index for the next frame.
+	outputIdx = 1u - outputIdx;
 
 	// Unbind shared constant buffers and samplers.
 	ID3D11Buffer*       nullCB[1]   = { nullptr };
@@ -310,7 +461,5 @@ ID3D11ShaderResourceView* ScreenSpaceDisplacementMapping::GetVirtualDepthSRV() c
 {
 	if (!loaded || !settings.Enabled)
 		return nullptr;
-	if (!csDisplace || !texRefinedDepth[outputIdx])
-		return nullptr;
-	return texRefinedDepth[outputIdx]->srv.get();
+	return latestOutputSRV;
 }

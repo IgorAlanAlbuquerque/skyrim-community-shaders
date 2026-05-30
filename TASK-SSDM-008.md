@@ -25,6 +25,7 @@ Implementar a interface de configuração ImGui, a serialização/deserializaç�
 ## Detalhes técnicos
 
 **`Settings` struct final:**
+
 ```cpp
 struct alignas(16) Settings {
     // Geral
@@ -53,6 +54,7 @@ struct alignas(16) Settings {
 ```
 
 **`DrawSettings()` — estrutura de UI:**
+
 ```
 [✓] Enable Screen-Space Displacement Mapping
   → Tooltip: "Refines apparent surface depth for parallax materials."
@@ -84,6 +86,7 @@ struct alignas(16) Settings {
 ```
 
 **Serialização JSON:**
+
 ```cpp
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
     ScreenSpaceDisplacementMapping::Settings,
@@ -104,6 +107,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 ```
 
 **`GetFeatureSummary()`:**
+
 ```cpp
 std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 {
@@ -121,6 +125,7 @@ std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 ```
 
 **Arquivo `.ini` final:**
+
 ```ini
 [Info]
 Version = 1-0-0
@@ -133,6 +138,7 @@ autoupload = false
 ```
 
 **Atualização do SSDMCB em `DrawSSDM()`:**
+
 ```cpp
 SSDMCB cbData{};
 cbData.DisplacementScale    = settings.DisplacementScale;

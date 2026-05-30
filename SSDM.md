@@ -248,19 +248,19 @@ A hybrid approach is likely ideal.
 
 ## Screen Space Displacement Mapping (Original Paper)
 
-https://www.divideconcept.net/papers/SSDM-RL08.pdf
+<https://www.divideconcept.net/papers/SSDM-RL08.pdf>
 
 ## View-Dependent Displacement Mapping
 
-https://www.microsoft.com/en-us/research/publication/view-dependent-displacement-mapping/
+<https://www.microsoft.com/en-us/research/publication/view-dependent-displacement-mapping/>
 
 ## GPU Gems 2 – Pixel Displacement Mapping
 
-https://developer.nvidia.com/gpugems/gpugems2/part-i-geometric-complexity/chapter-8-pixel-displacement-mapping-distance-functions
+<https://developer.nvidia.com/gpugems/gpugems2/part-i-geometric-complexity/chapter-8-pixel-displacement-mapping-distance-functions>
 
 ## Unreal Engine SSDM Discussion
 
-https://forums.unrealengine.com/t/screen-space-per-pixel-displacement-mapping/45494
+<https://forums.unrealengine.com/t/screen-space-per-pixel-displacement-mapping/45494>
 
 ---
 
