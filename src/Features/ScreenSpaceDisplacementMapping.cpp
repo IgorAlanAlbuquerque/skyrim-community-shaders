@@ -22,6 +22,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 ////////////////////////////////////////////////////////////////////////////////////
 
+bool ScreenSpaceDisplacementMapping::HasShaderDefine(RE::BSShader::Type)
+{
+	// No game shader types currently need the SCREEN_SPACE_DISPLACEMENT_MAPPING define.
+	// Ray-march compute shaders (TASK-SSDM-005) are compiled directly via Util::CompileShader
+	// and receive their defines there, not through the ShaderCache game-shader path.
+	return false;
+}
+
 std::pair<std::string, std::vector<std::string>> ScreenSpaceDisplacementMapping::GetFeatureSummary()
 {
 	return std::make_pair(
@@ -71,4 +79,13 @@ void ScreenSpaceDisplacementMapping::ClearShaderCache()
 void ScreenSpaceDisplacementMapping::DrawSSDM()
 {
 	// Compute dispatch implementation in TASK-SSDM-005
+}
+
+ID3D11ShaderResourceView* ScreenSpaceDisplacementMapping::GetOffsetSRV() const
+{
+	if (!loaded || !settings.Enabled)
+		return nullptr;
+	// Returns the ray-march refined UV offset when implemented (TASK-SSDM-005).
+	// Until then returns nullptr so Deferred.cpp falls back to ExtendedMaterials UV-redirect.
+	return nullptr;
 }

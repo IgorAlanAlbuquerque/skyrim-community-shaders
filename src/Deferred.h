@@ -54,6 +54,9 @@ public:
 	// constant-buffer fields into a UAV.
 	void CopyShadowLightData();
 
+	template <typename T>
+	void SetShadowCascadeParameters(T& lightData, DirectionalShadowLightData& dd);
+
 	ID3D11BlendState* deferredBlendStates[7][2][13][2];
 	ID3D11BlendState* forwardBlendStates[7][2][13][2];
 

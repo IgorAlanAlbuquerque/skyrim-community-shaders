@@ -14,7 +14,7 @@ cbuffer SSDMParams : register(b0)
 	int pad1;
 };
 
-Texture2D<float2> PyramidA : register(t0);
+Texture2D<float4> PyramidA : register(t0);
 Texture2D<float2> PrevLevel : register(t1);
 RWTexture2D<float2> CurLevel : register(u0);
 SamplerState LinearSampler : register(s0);
@@ -43,10 +43,10 @@ void main(uint3 dtid : SV_DispatchThreadID)
 	float2 c01 = center + float2(-halfTexel.x, +halfTexel.y);
 	float2 c11 = center + float2(+halfTexel.x, +halfTexel.y);
 
-	float2 smp00 = PyramidA.SampleLevel(LinearSampler, c00, MipLevel);
-	float2 smp10 = PyramidA.SampleLevel(LinearSampler, c10, MipLevel);
-	float2 smp01 = PyramidA.SampleLevel(LinearSampler, c01, MipLevel);
-	float2 smp11 = PyramidA.SampleLevel(LinearSampler, c11, MipLevel);
+	float2 smp00 = PyramidA.SampleLevel(LinearSampler, c00, MipLevel).rg;
+	float2 smp10 = PyramidA.SampleLevel(LinearSampler, c10, MipLevel).rg;
+	float2 smp01 = PyramidA.SampleLevel(LinearSampler, c01, MipLevel).rg;
+	float2 smp11 = PyramidA.SampleLevel(LinearSampler, c11, MipLevel).rg;
 
 	float2 pos00 = c00 + smp00;
 	float2 pos10 = c10 + smp10;

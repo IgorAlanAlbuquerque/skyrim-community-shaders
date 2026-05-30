@@ -86,5 +86,6 @@ struct ExtendedMaterials : Feature
 	winrt::com_ptr<ID3D11SamplerState> ssdmLinearSampler;
 
 	ID3D11ShaderResourceView* GetSSDMOffsetSRV() const;
+	ID3D11ShaderResourceView* GetHeightGBufferSRV() const;
 	void ClearDisplacementTexture();
 };

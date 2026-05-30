@@ -9,7 +9,10 @@ public:
 
 	virtual inline std::string GetName() override { return "Screen Space Displacement Mapping"; }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceDisplacementMapping"; }
+	virtual inline std::string_view GetShaderDefineName() override { return "SCREEN_SPACE_DISPLACEMENT_MAPPING"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kMaterials; }
+
+	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 
@@ -22,6 +25,15 @@ public:
 	virtual void ClearShaderCache() override;
 
 	void DrawSSDM();
+
+	// Returns the refined UV offset SRV produced by ray marching, or nullptr when
+	// this feature is disabled or not yet computed. Deferred.cpp checks this first;
+	// if null it falls back to ExtendedMaterials::GetSSDMOffsetSRV() (UV-redirect).
+	ID3D11ShaderResourceView* GetOffsetSRV() const;
+
+	// D3D11 RT slot where Lighting.hlsl writes the SSDMDisplacement output (SV_Target7).
+	// RG = screen-space UV delta, B = raw parallax height [0,1], A = reserved.
+	static constexpr uint32_t kHeightGBufferRTVSlot = 7;
 
 	/////////////////////////////////////////////////////////////////////////
 

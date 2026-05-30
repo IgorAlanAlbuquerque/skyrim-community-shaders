@@ -375,7 +375,11 @@ void Deferred::DeferredPasses()
 	auto& ibl = globals::features::ibl;
 
 	auto& extendedMaterials = globals::features::extendedMaterials;
-	extendedMaterials.DrawSSDM();
+	// Skip UV-redirect compute when ScreenSpaceDisplacementMapping provides its own
+	// ray-march output — both cannot bind t17 simultaneously, and the pyramid/refinement
+	// passes would produce unused textures.
+	if (!globals::features::screenSpaceDisplacementMapping.GetOffsetSRV())
+		extendedMaterials.DrawSSDM();
 
 	// Deferred Composite
 	{
@@ -413,7 +417,12 @@ void Deferred::DeferredPasses()
 		ID3D11ShaderResourceView* modeSRV = stereoCullingReady ? vrStereoOpt.GetModeTextureSRV() : nullptr;
 		context->CSSetShaderResources(16, 1, &modeSRV);
 
-		ID3D11ShaderResourceView* ssdmSRV = extendedMaterials.GetSSDMOffsetSRV();
+		// Priority: ray-march SSDM (ScreenSpaceDisplacementMapping) when active and providing
+		// its own output; otherwise fall back to ExtendedMaterials UV-redirect.
+		auto& ssdmFeature = globals::features::screenSpaceDisplacementMapping;
+		ID3D11ShaderResourceView* ssdmSRV = ssdmFeature.GetOffsetSRV();
+		if (!ssdmSRV)
+			ssdmSRV = extendedMaterials.GetSSDMOffsetSRV();
 		context->CSSetShaderResources(17, 1, &ssdmSRV);
 
 		if (extendedMaterials.loaded && extendedMaterials.settings.EnableParallax && texMainCopy) {

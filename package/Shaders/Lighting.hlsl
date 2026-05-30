@@ -344,7 +344,7 @@ struct PS_OUTPUT
 	float4 Specular: SV_Target4;
 	float4 Reflectance: SV_Target5;
 	float4 Masks: SV_Target6;
-	float2 SSDMDisplacement: SV_Target7;
+	float4 SSDMDisplacement: SV_Target7;
 };
 #else
 struct PS_OUTPUT
@@ -1016,6 +1016,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float mipLevel = 0;
 #	endif  // LANDSCAPE
 	float2 ssdmDisplacement = float2(0, 0);
+	float  ssdmRawHeight = 0.0;
 
 #	if defined(EMAT)
 #		if defined(LANDSCAPE)
@@ -1050,6 +1051,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::extendedMaterialSettings.EnableParallax) {
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
 		float height = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
+		ssdmRawHeight = height;
 		height = ExtendedMaterials::AdjustDisplacementNormalized(height, displacementParams);
 		float3 normalVS = normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
 		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, normalVS, height - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
@@ -1079,6 +1081,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
 				float cmHeight = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
+				ssdmRawHeight = cmHeight;
 				cmHeight = ExtendedMaterials::AdjustDisplacementNormalized(cmHeight, displacementParams);
 				float3 cmNormalVS =  normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
 				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, cmNormalVS, cmHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
@@ -1127,6 +1130,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
 		float pbrHeight = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
+		ssdmRawHeight = pbrHeight;
 		pbrHeight = ExtendedMaterials::AdjustDisplacementNormalized(pbrHeight, displacementParams);
 		float3 pbrNormalVS = normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
 		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, pbrNormalVS, pbrHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
@@ -1234,6 +1238,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.y = weights[5];
 		}
 		float3 terrainNormalVS =  normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
+		ssdmRawHeight = saturate(terrainHeight + 0.5);
 		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, terrainNormalVS, terrainHeight, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
 	}
 #			if defined(TERRAIN_VARIATION)
@@ -3162,7 +3167,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
 #		if defined(DEFERRED)
-	psout.SSDMDisplacement = ssdmDisplacement;
+	psout.SSDMDisplacement = float4(ssdmDisplacement, ssdmRawHeight, 0.0);
 #		endif
 
 #		if defined(SNOW)

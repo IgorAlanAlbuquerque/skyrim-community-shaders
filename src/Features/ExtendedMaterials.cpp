@@ -135,7 +135,7 @@ void ExtendedMaterials::SetupResources()
 			.Height = h,
 			.MipLevels = SSDM_MIP_LEVELS,
 			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R16G16_FLOAT,
+			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 			.SampleDesc = { .Count = 1, .Quality = 0 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS,
@@ -145,16 +145,16 @@ void ExtendedMaterials::SetupResources()
 
 		texDisplacement = eastl::make_unique<Texture2D>(texDesc);
 		texDisplacement->CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC{
-			.Format = DXGI_FORMAT_R16G16_FLOAT,
+			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = SSDM_MIP_LEVELS } });
 
-		CD3D11_RENDER_TARGET_VIEW_DESC rtvDesc(D3D11_RTV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R16G16_FLOAT, 0);
+		CD3D11_RENDER_TARGET_VIEW_DESC rtvDesc(D3D11_RTV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R16G16B16A16_FLOAT, 0);
 		DX::ThrowIfFailed(device->CreateRenderTargetView(texDisplacement->resource.get(), &rtvDesc, rtvDisplacement.put()));
 
 		for (int i = 0; i < SSDM_MIP_LEVELS; ++i) {
 			D3D11_UNORDERED_ACCESS_VIEW_DESC mipUav = {
-				.Format = DXGI_FORMAT_R16G16_FLOAT,
+				.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 				.Texture2D = { .MipSlice = (UINT)i }
 			};
@@ -235,6 +235,11 @@ void ExtendedMaterials::RegisterDisplacementRT()
 ID3D11ShaderResourceView* ExtendedMaterials::GetSSDMOffsetSRV() const
 {
 	return (texSSDMLevel[0] && settings.EnableParallax) ? texSSDMLevel[0]->srv.get() : nullptr;
+}
+
+ID3D11ShaderResourceView* ExtendedMaterials::GetHeightGBufferSRV() const
+{
+	return texDisplacement ? texDisplacement->srv.get() : nullptr;
 }
 
 void ExtendedMaterials::ClearDisplacementTexture()

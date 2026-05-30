@@ -12,8 +12,8 @@ cbuffer SSDMParams : register(b0)
 	int pad2;
 };
 
-Texture2D<float2> SrcTexture : register(t0);
-RWTexture2D<float2> DstTexture : register(u0);
+Texture2D<float4> SrcTexture : register(t0);
+RWTexture2D<float4> DstTexture : register(u0);
 SamplerState LinearSampler : register(s0);
 
 [numthreads(8, 8, 1)]
@@ -25,6 +25,6 @@ void main(uint3 dtid : SV_DispatchThreadID)
 		return;
 
 	float2 uv = (float2(dtid.xy) + 0.5) / float2(dstDim);
-	float2 result = SrcTexture.SampleLevel(LinearSampler, uv, SrcMipLevel);
-	DstTexture[dtid.xy] = result;
+	float2 uvDelta = SrcTexture.SampleLevel(LinearSampler, uv, SrcMipLevel).rg;
+	DstTexture[dtid.xy] = float4(uvDelta, 0.0, 0.0);
 }
