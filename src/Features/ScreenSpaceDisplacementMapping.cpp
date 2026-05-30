@@ -1,6 +1,7 @@
 #include "ScreenSpaceDisplacementMapping.h"
 
 #include "Deferred.h"
+#include "Features/ExtendedMaterials.h"
 #include "State.h"
 #include "Util.h"
 
@@ -126,6 +127,35 @@ void ScreenSpaceDisplacementMapping::SetupResources()
 		Util::SetResourceName(samplerLinearClamp.get(), "SSDM::LinearClampSampler");
 	}
 
+	// ---- Virtual depth output (ping-pong) ------------------------------------
+	// Stores view-space linear depth of the apparent displaced surface.
+	// R32_FLOAT preserves depth precision needed for SSAO/SSGI integration (Task 7).
+	// Smaller value than original → surface appears raised (closer to camera).
+	{
+		D3D11_TEXTURE2D_DESC texDesc{
+			.Width      = mainDesc.Width,
+			.Height     = mainDesc.Height,
+			.MipLevels  = 1,
+			.ArraySize  = 1,
+			.Format     = DXGI_FORMAT_R32_FLOAT,
+			.SampleDesc = { .Count = 1, .Quality = 0 },
+			.Usage      = D3D11_USAGE_DEFAULT,
+			.BindFlags  = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+		};
+		for (int i = 0; i < 2; ++i) {
+			auto name       = fmt::format("SSDM::RefinedDepth{}", i);
+			texRefinedDepth[i] = eastl::make_unique<Texture2D>(texDesc, name.c_str());
+			texRefinedDepth[i]->CreateSRV({
+				.Format        = DXGI_FORMAT_R32_FLOAT,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D     = { .MostDetailedMip = 0, .MipLevels = 1 } });
+			texRefinedDepth[i]->CreateUAV({
+				.Format        = DXGI_FORMAT_R32_FLOAT,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D     = { .MipSlice = 0 } });
+		}
+	}
+
 	// ---- Constant buffer ----------------------------------------------------
 	ssdmCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<SSDMCB>());
 
@@ -143,6 +173,52 @@ void ScreenSpaceDisplacementMapping::ClearShaderCache()
 	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(
 			Util::CompileShader((shaderDir / "prefilterDepth.cs.hlsl").c_str(), {}, "cs_5_0")))
 		csPrefilterDepth.attach(raw);
+
+	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(
+			Util::CompileShader((shaderDir / "displace.cs.hlsl").c_str(), {}, "cs_5_0")))
+		csDisplace.attach(raw);
+}
+
+void ScreenSpaceDisplacementMapping::UpdateSSDMCB()
+{
+	static float4x4 prevInvView[2] = {};
+
+	SSDMCB data{};
+	const int numEyes = 1 + REL::Module::IsVR();
+	for (int eyeIndex = 0; eyeIndex < numEyes; ++eyeIndex) {
+		auto eye = Util::GetCameraData(eyeIndex);
+
+		data.PrevInvViewMat[eyeIndex] = prevInvView[eyeIndex];
+		data.NDCToViewMul[eyeIndex]   = { 2.0f / eye.projMat(0, 0), -2.0f / eye.projMat(1, 1) };
+		data.NDCToViewAdd[eyeIndex]   = { -1.0f / eye.projMat(0, 0), 1.0f / eye.projMat(1, 1) };
+		if (REL::Module::IsVR())
+			data.NDCToViewMul[eyeIndex].x *= 2.0f;
+
+		prevInvView[eyeIndex] = eye.viewMat.Invert();
+	}
+
+	const float2 texDim   = { (float)texDepthHierarchy->desc.Width,
+		                       (float)texDepthHierarchy->desc.Height };
+	const float2 frameDim = Util::ConvertToDynamic(
+		{ (float)texRefinedDepth[0]->desc.Width, (float)texRefinedDepth[0]->desc.Height });
+
+	data.TexDim              = texDim;
+	data.RcpTexDim           = float2(1.0f) / texDim;
+	data.FrameDim            = frameDim;
+	data.RcpFrameDim         = float2(1.0f) / frameDim;
+	data.FrameIndex          = globals::state->frameCount;
+	data.DisplacementScale   = settings.DisplacementScale;
+	data.MaxDisplacementDist = settings.MaxDisplacementDist;
+	data.FadeAngleCos        = std::cosf(settings.FadeAngle * (3.14159265f / 180.0f));
+	data.NumRaymarchSteps    = settings.NumRaymarchSteps;
+	data.NumBinarySearchSteps = settings.NumBinarySearchSteps;
+	data.ResolutionMode      = settings.ResolutionMode;
+	data.MinBlendAlpha       = settings.MinBlendAlpha;
+	data.MaxAccumFrames      = settings.MaxAccumFrames;
+	data.BlurRadius          = settings.BlurRadius;
+	data.BlurDepthSigma      = settings.BlurDepthSigma;
+
+	ssdmCB->Update(data);
 }
 
 void ScreenSpaceDisplacementMapping::DrawSSDM()
@@ -156,7 +232,19 @@ void ScreenSpaceDisplacementMapping::DrawSSDM()
 
 	auto context = globals::d3d::context;
 
-	// --- Pre-filter depth hierarchy ------------------------------------------
+	// Update constant buffer with current frame data.
+	UpdateSSDMCB();
+
+	// Bind shared state used by both passes.
+	auto* cb       = ssdmCB->CB();
+	auto* sharedCB = globals::state->sharedDataCB->CB();
+	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetConstantBuffers(5, 1, &sharedCB);
+
+	ID3D11SamplerState* samplers[] = { samplerPointClamp.get(), samplerLinearClamp.get() };
+	context->CSSetSamplers(0, 2, samplers);
+
+	// --- Prefilter depth pyramid --------------------------------------------
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "SSDM - Prefilter Depth");
 
@@ -171,33 +259,58 @@ void ScreenSpaceDisplacementMapping::DrawSSDM()
 			uavs[i] = uavDepthHierarchy[i].get();
 		context->CSSetUnorderedAccessViews(0, 5, uavs, nullptr);
 
-		ID3D11SamplerState* samplers[] = { samplerPointClamp.get(), samplerLinearClamp.get() };
-		context->CSSetSamplers(0, 2, samplers);
-
-		auto* cb = ssdmCB->CB();
-		context->CSSetConstantBuffers(1, 1, &cb);
-		auto* sharedCB = globals::state->sharedDataCB->CB();
-		context->CSSetConstantBuffers(5, 1, &sharedCB);
-
 		context->CSSetShader(csPrefilterDepth.get(), nullptr, 0);
-		// Each thread writes 2×2 mip-0 pixels → dispatch covers mip-1 dimensions.
+		// Each thread covers a 2×2 mip-0 block → dispatch covers mip-1 dimensions.
 		context->Dispatch((halfW / 2 + 7) / 8, (halfH / 2 + 7) / 8, 1);
 
-		// Unbind
-		ID3D11ShaderResourceView* nullSrv[1]  = { nullptr };
+		ID3D11ShaderResourceView*  nullSrv[1] = { nullptr };
 		ID3D11UnorderedAccessView* nullUav[5] = {};
 		context->CSSetShaderResources(0, 1, nullSrv);
 		context->CSSetUnorderedAccessViews(0, 5, nullUav, nullptr);
 	}
 
-	// Ray-march compute dispatch (TASK-SSDM-005)
+	// --- Ray-march displace pass -------------------------------------------
+	if (csDisplace && texRefinedDepth[outputIdx]) {
+		TracyD3D11Zone(globals::state->tracyCtx, "SSDM - Displace");
+
+		auto  renderer = globals::game::renderer;
+		auto& em       = globals::features::extendedMaterials;
+
+		ID3D11ShaderResourceView* srvs[] = {
+			Util::GetCurrentSceneDepthSRV(),                                        // t0 raw NDC depth
+			renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS].SRV,          // t1 normals
+			em.loaded ? em.GetHeightGBufferSRV() : nullptr,                         // t2 parallax height
+			texDepthHierarchy->srv.get(),                                           // t3 depth pyramid
+		};
+		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+		ID3D11UnorderedAccessView* uav = texRefinedDepth[outputIdx]->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+
+		context->CSSetShader(csDisplace.get(), nullptr, 0);
+		const uint w = texRefinedDepth[outputIdx]->desc.Width;
+		const uint h = texRefinedDepth[outputIdx]->desc.Height;
+		context->Dispatch((w + 15) / 16, (h + 15) / 16, 1);
+
+		ID3D11ShaderResourceView*  nullSrvs[4] = {};
+		ID3D11UnorderedAccessView* nullUav      = nullptr;
+		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+	}
+
+	// Unbind shared constant buffers and samplers.
+	ID3D11Buffer*       nullCB[1]   = { nullptr };
+	ID3D11SamplerState* nullSamp[2] = {};
+	context->CSSetConstantBuffers(1, 1, nullCB);
+	context->CSSetConstantBuffers(5, 1, nullCB);
+	context->CSSetSamplers(0, 2, nullSamp);
 }
 
-ID3D11ShaderResourceView* ScreenSpaceDisplacementMapping::GetOffsetSRV() const
+ID3D11ShaderResourceView* ScreenSpaceDisplacementMapping::GetVirtualDepthSRV() const
 {
 	if (!loaded || !settings.Enabled)
 		return nullptr;
-	// Returns the ray-march refined UV offset when implemented (TASK-SSDM-005).
-	// Until then returns nullptr so Deferred.cpp falls back to ExtendedMaterials UV-redirect.
-	return nullptr;
+	if (!csDisplace || !texRefinedDepth[outputIdx])
+		return nullptr;
+	return texRefinedDepth[outputIdx]->srv.get();
 }

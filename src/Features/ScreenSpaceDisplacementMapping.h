@@ -24,12 +24,14 @@ public:
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
 
+	void UpdateSSDMCB();
 	void DrawSSDM();
 
-	// Returns the refined UV offset SRV produced by ray marching, or nullptr when
-	// this feature is disabled or not yet computed. Deferred.cpp checks this first;
-	// if null it falls back to ExtendedMaterials::GetSSDMOffsetSRV() (UV-redirect).
-	ID3D11ShaderResourceView* GetOffsetSRV() const;
+	// Returns the virtual linear depth SRV produced by the ray-march pass, or nullptr
+	// when the feature is disabled or resources are not ready.
+	// Consumed by SSAO/SSGI in Task 7 to produce depth-correct ambient occlusion
+	// and indirect lighting on parallax surfaces.
+	ID3D11ShaderResourceView* GetVirtualDepthSRV() const;
 
 	// D3D11 RT slot where Lighting.hlsl writes the SSDMDisplacement output (SV_Target7).
 	// RG = screen-space UV delta, B = raw parallax height [0,1], A = reserved.

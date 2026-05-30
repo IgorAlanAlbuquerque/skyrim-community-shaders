@@ -9,7 +9,14 @@
 
 ## Descrição
 
-Implementar o compute shader principal do SSDM (`displace.cs.hlsl`) que executa o raymarching em screen-space para calcular o deslocamento aparente de cada pixel com base na altura do parallax (GBuffer de TASK-SSDM-002/003) e no depth de cena. O output é uma textura de profundidade virtual refinada que representa a posição aparente da superfície com o deslocamento aplicado.
+Implementar o compute shader principal do SSDM (`displace.cs.hlsl`) que executa o raymarching em screen-space para calcular o deslocamento aparente de cada pixel com base na altura do parallax (GBuffer de TASK-SSDM-002/003) e no depth de cena. O output é uma textura de **profundidade virtual** (linear depth em view-space) que representa a posição aparente da superfície com o deslocamento aplicado.
+
+**Arquitetura de saída (distinção crítica):**
+
+- Este shader **NÃO** produz UV redirect (papel exclusivo de ExtendedMaterials via t17).
+- Produz `float` (linear depth) em `DXGI_FORMAT_R32_FLOAT` → consumido por SSAO/SSGI em Task 7.
+- Superfícies com geometria variada (terrain): ray-march encontra depth real da posição deslocada.
+- Superfícies planas com parallax (paredes, pisos): fallback H-based (`linearDepth - H*scale`) garante virtual depth útil mesmo sem hit no ray-march.
 
 Este é o shader de maior complexidade técnica do EPIC-SSDM.
 
@@ -26,7 +33,7 @@ Este é o shader de maior complexidade técnica do EPIC-SSDM.
 
 **Algoritmo SSDM (por pixel):**
 
-```
+```text
 1. Ler depth raw → converter para depth linear → reconstruir posição view-space P
 2. Ler normal de GBuffer → decodificar normal de superfície N
 3. Ler altura H do HeightGBuffer (de ExtendedMaterials)
@@ -48,13 +55,16 @@ Este é o shader de maior complexidade técnica do EPIC-SSDM.
 ```
 
 **Thread group e dispatch:**
+
 ```hlsl
 [numthreads(16, 16, 1)]
 void CS(uint3 DTid : SV_DispatchThreadID, uint2 GTid : SV_GroupThreadID)
 ```
+
 Dispatch: `((width + 15) / 16, (height + 15) / 16, 1)`
 
 **Inputs do compute shader:**
+
 - `t0`: depth buffer raw (SRV)
 - `t1`: normal GBuffer (NORMALROUGHNESS SRV)
 - `t2`: height GBuffer (ExtendedMaterials::HeightGBuffer SRV)
@@ -63,9 +73,11 @@ Dispatch: `((width + 15) / 16, (height + 15) / 16, 1)`
 - `b5`: SharedData (cbuffer global)
 
 **Output:**
+
 - `u0`: `texRefinedDepth[outputIdx]` (UAV) — depth linear refinado por pixel
 
 **Textura de output (C++ `SetupResources()`):**
+
 ```cpp
 D3D11_TEXTURE2D_DESC desc{
     .Width     = renderWidth,   // ou halfWidth se ResolutionMode > 0
@@ -79,12 +91,14 @@ for (int i = 0; i < 2; ++i)
 ```
 
 **Fade em ângulo rasante:**
+
 ```hlsl
 float angleFade = saturate((normalDotView - FadeAngleCos) / (1.0f - FadeAngleCos));
 float displacementAmount = lerp(0.0f, fullDisplacement, angleFade);
 ```
 
 **Thickness bias (evitar z-fighting):**
+
 ```hlsl
 bool SSDMDepthTest(float sampleLinearDepth, float rayLinearDepth)
 {
@@ -96,7 +110,7 @@ bool SSDMDepthTest(float sampleLinearDepth, float rayLinearDepth)
 
 ## Critérios de Aceitação
 
-- [ ] Shader compila sem erros com hlslkit.
+- [x] Shader compila sem erros com hlslkit. *(fxc /D COMPUTESHADER: 0 erros, 0 warnings, 125 instruction slots)*
 - [ ] No RenderDoc, `texRefinedDepth` contém values > 0 em pixels com parallax activo.
 - [ ] Pixels sem parallax têm depth refinado == depth original (fallback correto).
 - [ ] Fade em ângulo rasante funciona — deslocamento desaparece progressivamente em ângulos > FadeAngle.
@@ -120,7 +134,7 @@ bool SSDMDepthTest(float sampleLinearDepth, float rayLinearDepth)
 
 ## Observações
 
-- Referência de algoritmo: https://www.divideconcept.net/papers/SSDM-RL08.pdf (seção 3 — Screen-Space Raymarching).
+- Referência de algoritmo: <https://www.divideconcept.net/papers/SSDM-RL08.pdf> (seção 3 — Screen-Space Raymarching).
 - O raymarching ocorre em **view-space**, não em tangent-space como o POM. Isso é fundamental: as posições e direções devem ser em coordenadas de câmera.
 - A busca binária de refinamento não é obrigatória para a primeira versão — pode ser omitida com `NumBinarySearchSteps = 0` como caso de uso inicial.
 - Evitar leituras de depth via SRV do depth buffer real do Skyrim — usar o depth hierárquico criado em TASK-SSDM-004, que é uma cópia com mips. O depth original pode não ser bindable como SRV sem cópia.

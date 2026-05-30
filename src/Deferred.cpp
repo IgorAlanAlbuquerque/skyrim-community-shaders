@@ -237,10 +237,6 @@ void Deferred::PrepassPasses()
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
 	Feature::ForEachLoadedFeature("Prepass", [](Feature* feature) { feature->Prepass(); }, true);
-
-	auto& ssdm = globals::features::screenSpaceDisplacementMapping;
-	if (ssdm.loaded)
-		ssdm.DrawSSDM();
 }
 
 void Deferred::StartDeferred()
@@ -375,11 +371,14 @@ void Deferred::DeferredPasses()
 	auto& ibl = globals::features::ibl;
 
 	auto& extendedMaterials = globals::features::extendedMaterials;
-	// Skip UV-redirect compute when ScreenSpaceDisplacementMapping provides its own
-	// ray-march output — both cannot bind t17 simultaneously, and the pyramid/refinement
-	// passes would produce unused textures.
-	if (!globals::features::screenSpaceDisplacementMapping.GetOffsetSRV())
-		extendedMaterials.DrawSSDM();
+	auto& ssdmFeatureDP     = globals::features::screenSpaceDisplacementMapping;
+
+	// ExtendedMaterials UV-pyramid: provides t17 UV redirect for DeferredCompositeCS.
+	extendedMaterials.DrawSSDM();
+
+	// SSDM ray-march: produces virtual linear depth in texRefinedDepth for SSAO/SSGI (Task 7).
+	// Does NOT feed t17 — UV redirect remains ExtendedMaterials' responsibility.
+	ssdmFeatureDP.DrawSSDM();
 
 	// Deferred Composite
 	{
@@ -417,13 +416,10 @@ void Deferred::DeferredPasses()
 		ID3D11ShaderResourceView* modeSRV = stereoCullingReady ? vrStereoOpt.GetModeTextureSRV() : nullptr;
 		context->CSSetShaderResources(16, 1, &modeSRV);
 
-		// Priority: ray-march SSDM (ScreenSpaceDisplacementMapping) when active and providing
-		// its own output; otherwise fall back to ExtendedMaterials UV-redirect.
-		auto& ssdmFeature = globals::features::screenSpaceDisplacementMapping;
-		ID3D11ShaderResourceView* ssdmSRV = ssdmFeature.GetOffsetSRV();
-		if (!ssdmSRV)
-			ssdmSRV = extendedMaterials.GetSSDMOffsetSRV();
-		context->CSSetShaderResources(17, 1, &ssdmSRV);
+		// t17: ExtendedMaterials UV redirect for parallax GBuffer sampling.
+		// SSDM's virtual depth (GetVirtualDepthSRV) is wired to SSAO/SSGI in Task 7, not here.
+		ID3D11ShaderResourceView* emSRV = extendedMaterials.GetSSDMOffsetSRV();
+		context->CSSetShaderResources(17, 1, &emSRV);
 
 		if (extendedMaterials.loaded && extendedMaterials.settings.EnableParallax && texMainCopy) {
 			context->CopyResource(texMainCopy->resource.get(), main.texture);
