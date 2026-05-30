@@ -1,6 +1,8 @@
 #include "ExtendedMaterials.h"
 
 #include "Deferred.h"
+#include "Globals.h"
+#include "Features/ScreenSpaceDisplacementMapping.h"
 #include "State.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -41,9 +43,13 @@ void ExtendedMaterials::DrawSettings()
 
 	if (ImGui::TreeNodeEx("Screen Space Displacement", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Enable Displacement", (bool*)&settings.EnableParallax);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
+		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Enables screen-space displacement mapping (SSDM) on meshes and terrain.");
-		}
+
+		if (settings.EnableParallax)
+			globals::features::screenSpaceDisplacementMapping.DrawInlineSettings();
+
+		ImGui::Spacing();
 
 		if (ImGui::Checkbox("Enable Legacy Terrain", (bool*)&settings.EnableTerrain)) {
 			if (settings.EnableTerrain) {

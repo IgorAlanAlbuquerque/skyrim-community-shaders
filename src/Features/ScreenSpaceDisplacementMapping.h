@@ -12,12 +12,16 @@ public:
 	virtual inline std::string_view GetShaderDefineName() override { return "SCREEN_SPACE_DISPLACEMENT_MAPPING"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kMaterials; }
 
+	// Settings live inside Extended Materials > Screen Space Displacement — no standalone menu entry.
+	virtual bool IsInMenu() const override { return false; }
+
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void DrawSettings() override;
+	void DrawInlineSettings();
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 

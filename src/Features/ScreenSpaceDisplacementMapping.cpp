@@ -51,9 +51,104 @@ void ScreenSpaceDisplacementMapping::RestoreDefaultSettings()
 
 void ScreenSpaceDisplacementMapping::DrawSettings()
 {
-	ImGui::Checkbox("Enabled", &settings.Enabled);
+	ImGui::TextDisabled("Configure via Extended Materials \xe2\x86\x92 Screen Space Displacement.");
+}
+
+void ScreenSpaceDisplacementMapping::DrawInlineSettings()
+{
+	if (!loaded)
+		return;
+
+	ImGui::Spacing();
+	ImGui::Checkbox("Enable Raymarching Depth Refinement", &settings.Enabled);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Enable Screen Space Displacement Mapping. Refines apparent depth of parallax surfaces for improved SSAO/SSGI interaction.");
+		ImGui::Text(
+			"Refines apparent surface depth via screen-space raymarching for improved\n"
+			"SSAO and SSGI integration. Requires Enable Displacement.");
+
+	if (!settings.Enabled)
+		return;
+
+	ImGui::Indent();
+
+	// ---- Raymarching --------------------------------------------------------
+	ImGui::SeparatorText("Raymarching");
+
+	ImGui::SliderInt("Steps##ssdm", (int*)&settings.NumRaymarchSteps, 4, 32);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Number of ray-march steps. Higher = more accurate but more expensive.");
+	if (settings.NumRaymarchSteps > 16)
+		ImGui::TextColored({ 1.f, 0.7f, 0.f, 1.f },
+			"[!] High step count — consider Half resolution to compensate.");
+
+	ImGui::SliderInt("Binary Refinement##ssdm", (int*)&settings.NumBinarySearchSteps, 0, 8);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Sub-step binary search for sharper contact edges.");
+
+	ImGui::SliderFloat("Scale##ssdm", &settings.DisplacementScale, 0.1f, 3.0f, "%.2f");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Displacement intensity multiplier.");
+
+	ImGui::SliderFloat("Max Distance##ssdm", &settings.MaxDisplacementDist, 0.05f, 2.0f, "%.2f m");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Maximum ray-march distance in view-space units.");
+
+	// ---- Quality ------------------------------------------------------------
+	ImGui::SeparatorText("Quality");
+
+	{
+		static const char* resModes[] = { "Full", "Half (Recommended)", "Quarter" };
+		int mode = (int)settings.ResolutionMode;
+		if (ImGui::Combo("Resolution##ssdm", &mode, resModes, IM_ARRAYSIZE(resModes))) {
+			settings.ResolutionMode = (uint)mode;
+			recompileFlag = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Resolution for the ray-march pass. Half is recommended for most GPUs.");
+	}
+
+	ImGui::SliderFloat("Fade Angle##ssdm", &settings.FadeAngle, 30.0f, 85.0f, "%.1f deg");
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("Angle at which the effect fades out to avoid grazing-angle artifacts.");
+
+	// ---- Temporal Stabilization ---------------------------------------------
+	if (ImGui::TreeNodeEx("Temporal Stabilization##ssdm", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable##ssdm_temporal", &settings.EnableTemporalStabilization);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Accumulates depth over multiple frames to suppress flickering.");
+
+		if (settings.EnableTemporalStabilization) {
+			ImGui::SliderFloat("Blend Alpha##ssdm", &settings.MinBlendAlpha, 0.02f, 0.5f, "%.3f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Minimum blend weight of the current frame when converged.\n"
+					"Lower = more stable, higher = faster response to movement.");
+
+			ImGui::SliderInt("Max Accum Frames##ssdm", (int*)&settings.MaxAccumFrames, 8, 64);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Frames needed to reach full temporal convergence.");
+		}
+		ImGui::TreePop();
+	}
+
+	// ---- Spatial Blur -------------------------------------------------------
+	if (ImGui::TreeNodeEx("Spatial Blur##ssdm", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Enable##ssdm_blur", &settings.EnableBlur);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("Cross-bilateral blur to smooth residual noise after temporal accumulation.");
+
+		if (settings.EnableBlur) {
+			ImGui::SliderInt("Radius##ssdm", (int*)&settings.BlurRadius, 1, 3);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Blur kernel radius in pixels.");
+
+			ImGui::SliderFloat("Depth Sigma##ssdm", &settings.BlurDepthSigma, 0.01f, 1.0f, "%.3f");
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("Depth-based edge-stopping sigma. Lower = sharper depth boundaries.");
+		}
+		ImGui::TreePop();
+	}
+
+	ImGui::Unindent();
 }
 
 void ScreenSpaceDisplacementMapping::LoadSettings(json& o_json)
