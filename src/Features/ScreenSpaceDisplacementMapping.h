@@ -82,7 +82,16 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(SSDMCB);
 	eastl::unique_ptr<ConstantBuffer> ssdmCB;
 
+	// Depth hierarchy: 5-mip conservative (max) pyramid at half resolution.
+	// Mip 0 = half-res, mip 4 = 1/32 of full res.  Used by the ray-march pass.
+	eastl::unique_ptr<Texture2D>                texDepthHierarchy    = nullptr;
+	winrt::com_ptr<ID3D11UnorderedAccessView>   uavDepthHierarchy[5] = { nullptr };
+	winrt::com_ptr<ID3D11ComputeShader>         csPrefilterDepth     = nullptr;
+
 	eastl::unique_ptr<Texture2D> texRefinedDepth[2] = { nullptr };
 
 	winrt::com_ptr<ID3D11ComputeShader> csDisplace = nullptr;
+
+	winrt::com_ptr<ID3D11SamplerState> samplerPointClamp  = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> samplerLinearClamp = nullptr;
 };

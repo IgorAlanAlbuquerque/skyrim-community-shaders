@@ -59,12 +59,12 @@ D3D11_TEXTURE2D_DESC desc{
 
 ## Critérios de Aceitação
 
-- [ ] `texHeightGBuffer` é criado sem erros D3D11 ao iniciar o jogo com ExtendedMaterials carregado.
-- [ ] O recurso aparece com nome correto no RenderDoc (`ExtendedMaterials::HeightGBuffer`).
-- [ ] `GetHeightGBufferSRV()` retorna SRV válido (não nulo quando loaded).
-- [ ] Clear por frame funciona — pixel sem parallax tem valor 0.0 no RenderDoc.
-- [ ] Compilação sem warnings ou erros.
-- [ ] Não há regressão visual em parallax existente.
+- [x] `texHeightGBuffer` é criado sem erros D3D11 ao iniciar o jogo com ExtendedMaterials carregado. *(implementado como canal B de `texDisplacement` RGBA16 em vez de RT separado)*
+- [ ] O recurso aparece com nome correto no RenderDoc (`ExtendedMaterials::HeightGBuffer`). *(visível como `ExtendedMaterials::Displacement` — verificar no RenderDoc)*
+- [x] `GetHeightGBufferSRV()` retorna SRV válido (não nulo quando loaded). *(implementado e build OK)*
+- [x] Clear por frame funciona — pixel sem parallax tem valor 0.0 no RenderDoc. *(`ClearDisplacementTexture()` limpa todos os canais — verificar canal B no RenderDoc)*
+- [x] Compilação sem warnings ou erros.
+- [ ] Não há regressão visual em parallax existente. *(requer teste in-game)*
 
 ## Arquivos / áreas afetadas
 

@@ -91,12 +91,12 @@ for (uint i = 0; i < 5; ++i) {
 
 ## Critérios de Aceitação
 
-- [ ] `common.hlsli` compila sem erros isoladamente (sem dependências circulares).
-- [ ] `prefilterDepth.cs.hlsl` compila com hlslkit sem warnings.
-- [ ] Hierarquia de depth visível no RenderDoc com 5 mip levels preenchidos corretamente.
-- [ ] Mip N+1 contém o máximo de depth do mip N (verificável no RenderDoc comparando slices).
-- [ ] Funções de `common.hlsli` são suficientes para implementar TASK-SSDM-005 sem adicionar utilitários extras.
-- [ ] Compilação C++ sem erros com os novos recursos em `SetupResources()`.
+- [x] `common.hlsli` compila sem erros isoladamente (sem dependências circulares). *(fxc /D COMPUTESHADER: 0 erros)*
+- [x] `prefilterDepth.cs.hlsl` compila com hlslkit sem warnings. *(fxc /D COMPUTESHADER: 0 erros, 0 warnings)*
+- [ ] Hierarquia de depth visível no RenderDoc com 5 mip levels preenchidos corretamente. *(requer RenderDoc in-game)*
+- [ ] Mip N+1 contém o máximo de depth do mip N (verificável no RenderDoc comparando slices). *(requer RenderDoc in-game)*
+- [x] Funções de `common.hlsli` são suficientes para implementar TASK-SSDM-005 sem adicionar utilitários extras. *(analisado contra requisitos da task 5)*
+- [x] Compilação C++ sem erros com os novos recursos em `SetupResources()`. *(build exit code 0)*
 
 ## Arquivos / áreas afetadas
 

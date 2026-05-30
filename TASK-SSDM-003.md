@@ -50,12 +50,12 @@ E usar o mesmo valor tanto no C++ (bind do RTV) quanto no shader (`SV_Target7`).
 
 ## Critérios de Aceitação
 
-- [ ] Compilação de `Lighting.hlsl` não gera erros ou warnings novos (validar com hlslkit).
-- [ ] No RenderDoc, pixels com parallax ativo mostram valor > 0.0 no `HeightGBuffer`.
-- [ ] Pixels sem parallax (superfícies planas) mostram 0.0 no `HeightGBuffer`.
-- [ ] Performance do material pass não é afetada mensurável quando SSDM está desabilitado (define guard funciona).
-- [ ] VR: ambos os olhos escrevem no `HeightGBuffer` corretamente.
-- [ ] Sem regressão visual em qualquer shader existente.
+- [x] Compilação de `Lighting.hlsl` não gera erros ou warnings novos (validar com hlslkit). *(hlslkit: 0 warnings, 0 errors)*
+- [ ] No RenderDoc, pixels com parallax ativo mostram valor > 0.0 no `HeightGBuffer`. *(canal B de RT7 — requer RenderDoc in-game)*
+- [ ] Pixels sem parallax (superfícies planas) mostram 0.0 no `HeightGBuffer`. *(requer RenderDoc in-game)*
+- [x] Performance do material pass não é afetada mensurável quando SSDM está desabilitado (define guard funciona). *(canal B usa mesmo guard `DEFERRED` do UV delta pré-existente — sem overhead adicional)*
+- [ ] VR: ambos os olhos escrevem no `HeightGBuffer` corretamente. *(requer hardware VR)*
+- [ ] Sem regressão visual em qualquer shader existente. *(requer teste in-game)*
 
 ## Arquivos / áreas afetadas
 

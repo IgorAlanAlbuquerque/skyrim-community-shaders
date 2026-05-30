@@ -67,18 +67,130 @@ void ScreenSpaceDisplacementMapping::SaveSettings(json& o_json)
 
 void ScreenSpaceDisplacementMapping::SetupResources()
 {
-	// GPU resources will be created in TASK-SSDM-005
+	auto device   = globals::d3d::device;
+	auto renderer = globals::game::renderer;
+
+	auto& mainRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	D3D11_TEXTURE2D_DESC mainDesc{};
+	mainRT.texture->GetDesc(&mainDesc);
+
+	const uint halfW = std::max(1u, mainDesc.Width  / 2);
+	const uint halfH = std::max(1u, mainDesc.Height / 2);
+
+	// ---- Depth hierarchy (5-mip conservative pyramid, half-res base) --------
+	{
+		D3D11_TEXTURE2D_DESC texDesc{
+			.Width     = halfW,
+			.Height    = halfH,
+			.MipLevels = 5,
+			.ArraySize = 1,
+			.Format    = DXGI_FORMAT_R32_FLOAT,
+			.SampleDesc = { .Count = 1, .Quality = 0 },
+			.Usage      = D3D11_USAGE_DEFAULT,
+			.BindFlags  = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+		};
+		texDepthHierarchy = eastl::make_unique<Texture2D>(texDesc, "SSDM::DepthHierarchy");
+		texDepthHierarchy->CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC{
+			.Format        = DXGI_FORMAT_R32_FLOAT,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D     = { .MostDetailedMip = 0, .MipLevels = 5 } });
+
+		for (uint i = 0; i < 5; ++i) {
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+				.Format        = DXGI_FORMAT_R32_FLOAT,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D     = { .MipSlice = i }
+			};
+			DX::ThrowIfFailed(device->CreateUnorderedAccessView(
+				texDepthHierarchy->resource.get(), &uavDesc, uavDepthHierarchy[i].put()));
+			Util::SetResourceName(uavDepthHierarchy[i].get(), "SSDM::DepthHierarchy UAV mip%u", i);
+		}
+	}
+
+	// ---- Samplers -----------------------------------------------------------
+	{
+		D3D11_SAMPLER_DESC desc{
+			.Filter         = D3D11_FILTER_MIN_MAG_MIP_POINT,
+			.AddressU       = D3D11_TEXTURE_ADDRESS_CLAMP,
+			.AddressV       = D3D11_TEXTURE_ADDRESS_CLAMP,
+			.AddressW       = D3D11_TEXTURE_ADDRESS_CLAMP,
+			.MaxAnisotropy  = 1,
+			.MinLOD         = 0,
+			.MaxLOD         = D3D11_FLOAT32_MAX,
+		};
+		DX::ThrowIfFailed(device->CreateSamplerState(&desc, samplerPointClamp.put()));
+		Util::SetResourceName(samplerPointClamp.get(), "SSDM::PointClampSampler");
+
+		desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+		DX::ThrowIfFailed(device->CreateSamplerState(&desc, samplerLinearClamp.put()));
+		Util::SetResourceName(samplerLinearClamp.get(), "SSDM::LinearClampSampler");
+	}
+
+	// ---- Constant buffer ----------------------------------------------------
+	ssdmCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<SSDMCB>());
+
+	ClearShaderCache();
 }
 
 void ScreenSpaceDisplacementMapping::ClearShaderCache()
 {
-	csDisplace = nullptr;
-	recompileFlag = true;
+	csPrefilterDepth = nullptr;
+	csDisplace       = nullptr;
+	recompileFlag    = true;
+
+	const auto shaderDir = std::filesystem::path("Data\\Shaders\\ScreenSpaceDisplacementMapping");
+
+	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(
+			Util::CompileShader((shaderDir / "prefilterDepth.cs.hlsl").c_str(), {}, "cs_5_0")))
+		csPrefilterDepth.attach(raw);
 }
 
 void ScreenSpaceDisplacementMapping::DrawSSDM()
 {
-	// Compute dispatch implementation in TASK-SSDM-005
+	if (!loaded || !settings.Enabled)
+		return;
+	if (!csPrefilterDepth || !texDepthHierarchy)
+		return;
+
+	ZoneScoped;
+
+	auto context = globals::d3d::context;
+
+	// --- Pre-filter depth hierarchy ------------------------------------------
+	{
+		TracyD3D11Zone(globals::state->tracyCtx, "SSDM - Prefilter Depth");
+
+		const uint halfW = texDepthHierarchy->desc.Width;
+		const uint halfH = texDepthHierarchy->desc.Height;
+
+		ID3D11ShaderResourceView* srvs[] = { Util::GetCurrentSceneDepthSRV() };
+		context->CSSetShaderResources(0, 1, srvs);
+
+		ID3D11UnorderedAccessView* uavs[5];
+		for (int i = 0; i < 5; ++i)
+			uavs[i] = uavDepthHierarchy[i].get();
+		context->CSSetUnorderedAccessViews(0, 5, uavs, nullptr);
+
+		ID3D11SamplerState* samplers[] = { samplerPointClamp.get(), samplerLinearClamp.get() };
+		context->CSSetSamplers(0, 2, samplers);
+
+		auto* cb = ssdmCB->CB();
+		context->CSSetConstantBuffers(1, 1, &cb);
+		auto* sharedCB = globals::state->sharedDataCB->CB();
+		context->CSSetConstantBuffers(5, 1, &sharedCB);
+
+		context->CSSetShader(csPrefilterDepth.get(), nullptr, 0);
+		// Each thread writes 2×2 mip-0 pixels → dispatch covers mip-1 dimensions.
+		context->Dispatch((halfW / 2 + 7) / 8, (halfH / 2 + 7) / 8, 1);
+
+		// Unbind
+		ID3D11ShaderResourceView* nullSrv[1]  = { nullptr };
+		ID3D11UnorderedAccessView* nullUav[5] = {};
+		context->CSSetShaderResources(0, 1, nullSrv);
+		context->CSSetUnorderedAccessViews(0, 5, nullUav, nullptr);
+	}
+
+	// Ray-march compute dispatch (TASK-SSDM-005)
 }
 
 ID3D11ShaderResourceView* ScreenSpaceDisplacementMapping::GetOffsetSRV() const

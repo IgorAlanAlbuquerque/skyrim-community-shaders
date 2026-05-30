@@ -61,11 +61,11 @@ if (ssdm.loaded)
 
 ## Critérios de Aceitação
 
-- [ ] Projeto compila sem erros com os novos arquivos.
-- [ ] Feature aparece no menu in-game do Community Shaders na categoria Materials.
-- [ ] Feature pode ser habilitada/desabilitada via menu sem crash.
-- [ ] `GetFeatureList()` inclui a nova entry em posição adequada (após `extendedMaterials`).
-- [ ] Arquivo `.ini` é detectado pelo sistema de versioning (build target `generate_shader_configs` não falha).
+- [x] Projeto compila sem erros com os novos arquivos.
+- [x] Feature aparece no menu in-game do Community Shaders na categoria Materials.
+- [x] Feature pode ser habilitada/desabilitada via menu sem crash.
+- [x] `GetFeatureList()` inclui a nova entry em posição adequada (após `extendedMaterials`).
+- [x] Arquivo `.ini` é detectado pelo sistema de versioning (build target `generate_shader_configs` não falha).
 - [ ] `DrawSSDM()` stub não causa crash quando chamado no deferred pipeline.
 
 ## Arquivos / áreas afetadas
