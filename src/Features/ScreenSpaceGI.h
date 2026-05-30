@@ -48,8 +48,8 @@ public:
 	void CompileComputeShaders();
 	bool ShadersOK();
 
-	void DrawSSGI();
-	void UpdateSB();
+	void DrawSSGI(ID3D11ShaderResourceView* ssdmDepthSRV = nullptr);
+	void UpdateSB(bool enableSSDMDepth = false);
 
 	//////////////////////////////////////////////////////////////////////////////////
 
@@ -126,8 +126,8 @@ public:
 
 		float BlurRadius;
 		float DistanceNormalisation;
-
-		float2 pad;
+		uint EnableSSDMDepth;  // 1 = prefilterDepths receives linear depth from SSDM, 0 = raw NDC
+		float pad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSGICB);
 	eastl::unique_ptr<ConstantBuffer> ssgiCB;

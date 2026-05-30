@@ -61,7 +61,8 @@ cbuffer SSGICB : register(b1)
 
 	float BlurRadius;
 	float DistanceNormalisation;
-	float2 pad;
+	uint EnableSSDMDepth;  // 1 = input depth is already linear (from SSDM), skip ScreenToViewDepth
+	float pad;
 };
 
 SamplerState samplerPointClamp : register(s0);

@@ -352,9 +352,14 @@ void Deferred::DeferredPasses()
 
 	auto& skylighting = globals::features::skylighting;
 
+	// SSDM must produce virtual depth before SSGI consumes it.
+	// DrawSSDM() is a no-op when the feature is disabled or not loaded.
+	auto& ssdm = globals::features::screenSpaceDisplacementMapping;
+	ssdm.DrawSSDM();
+
 	auto& ssgi = globals::features::screenSpaceGI;
 	if (ssgi.loaded)
-		ssgi.DrawSSGI();
+		ssgi.DrawSSGI(ssdm.GetVirtualDepthSRV());
 	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi.GetOutputTextures();
 	bool ssgi_hq_spec = ssgi.settings.EnableExperimentalSpecularGI;
 
@@ -371,14 +376,9 @@ void Deferred::DeferredPasses()
 	auto& ibl = globals::features::ibl;
 
 	auto& extendedMaterials = globals::features::extendedMaterials;
-	auto& ssdmFeatureDP     = globals::features::screenSpaceDisplacementMapping;
 
 	// ExtendedMaterials UV-pyramid: provides t17 UV redirect for DeferredCompositeCS.
 	extendedMaterials.DrawSSDM();
-
-	// SSDM ray-march: produces virtual linear depth in texRefinedDepth for SSAO/SSGI (Task 7).
-	// Does NOT feed t17 — UV redirect remains ExtendedMaterials' responsibility.
-	ssdmFeatureDP.DrawSSDM();
 
 	// Deferred Composite
 	{

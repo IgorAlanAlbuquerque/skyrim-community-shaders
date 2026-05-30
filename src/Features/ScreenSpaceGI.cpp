@@ -644,7 +644,7 @@ bool ScreenSpaceGI::ShadersOK()
 	return texNoise && prefilterDepthsCompute && prefilterRadianceCompute && prefilterNormalCompute && radianceDisoccCompute && giCompute && blurCompute && upsampleCompute;
 }
 
-void ScreenSpaceGI::UpdateSB()
+void ScreenSpaceGI::UpdateSB(bool enableSSDMDepth)
 {
 	float2 res = { (float)texRadiance->desc.Width, (float)texRadiance->desc.Height };
 	float2 dynres = Util::ConvertToDynamic(res);
@@ -695,12 +695,13 @@ void ScreenSpaceGI::UpdateSB()
 		data.MaxAccumFrames = settings.MaxAccumFrames;
 		data.BlurRadius = settings.BlurRadius;
 		data.DistanceNormalisation = settings.DistanceNormalisation;
+		data.EnableSSDMDepth = enableSSDMDepth ? 1u : 0u;
 	}
 
 	ssgiCB->Update(data);
 }
 
-void ScreenSpaceGI::DrawSSGI()
+void ScreenSpaceGI::DrawSSGI(ID3D11ShaderResourceView* ssdmDepthSRV)
 {
 	auto context = globals::d3d::context;
 
@@ -733,7 +734,7 @@ void ScreenSpaceGI::DrawSSGI()
 	if (recompileFlag)
 		ClearShaderCache();
 
-	UpdateSB();
+	UpdateSB(ssdmDepthSRV != nullptr);
 
 	//////////////////////////////////////////////////////
 
@@ -772,7 +773,8 @@ void ScreenSpaceGI::DrawSSGI()
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Depths");
 
-		srvs.at(0) = Util::GetCurrentSceneDepthSRV();
+		// Use SSDM virtual linear depth when available; fall back to raw scene depth otherwise.
+		srvs.at(0) = ssdmDepthSRV ? ssdmDepthSRV : Util::GetCurrentSceneDepthSRV();
 		for (int i = 0; i < 5; ++i)
 			uavs.at(i) = uavWorkingDepth[i].get();
 

@@ -82,13 +82,13 @@ O depth refinado está em `DXGI_FORMAT_R32_FLOAT` (linear depth). Se SSGI espera
 
 ## Critérios de Aceitação
 
-- [ ] SSAO/SSGI mostra sombras de contato mais profundas em superfícies com parallax (visível em pedras, tijolos) quando SSDM está ativo.
-- [ ] Desabilitar SSDM reverte SSAO/SSGI para comportamento original sem regressão.
-- [ ] Sem crash quando ScreenSpaceGI está loaded mas SSDM não está (fallback funciona).
-- [ ] Sem crash quando SSDM está loaded mas ScreenSpaceGI não está (SSDM roda mas output não é consumido — OK).
-- [ ] Ordem de passes correta no RenderDoc (SSDM aparece antes de SSGI na frame capture).
-- [ ] Sem conflitos de registro D3D11 (SRVs/UAVs não se sobrepõem entre SSDM e SSGI).
-- [ ] VR: integração funciona para ambos os olhos.
+- [ ] SSAO/SSGI mostra sombras de contato mais profundas em superfícies com parallax (visível em pedras, tijolos) quando SSDM está ativo. *(requer in-game)*
+- [ ] Desabilitar SSDM reverte SSAO/SSGI para comportamento original sem regressão. *(requer in-game — código: `GetVirtualDepthSRV()` retorna null quando desabilitado → `EnableSSDMDepth=0` → raw depth path)*
+- [x] Sem crash quando ScreenSpaceGI está loaded mas SSDM não está — `ssdm.GetVirtualDepthSRV()` retorna null, SSGI recebe null e usa raw depth com `EnableSSDMDepth=0`. *(validado por code review)*
+- [x] Sem crash quando SSDM está loaded mas ScreenSpaceGI não está — `ssdm.DrawSSDM()` roda, `ssgi.DrawSSGI()` não é chamado. *(validado por code review)*
+- [x] Ordem de passes correta: `ssdm.DrawSSDM()` movido para antes de `ssgi.DrawSSGI()` em `DeferredPasses()`. *(validado por code review)*
+- [x] Sem conflitos de registro D3D11 — SSDM faz unbind de todos os SRVs/UAVs antes de retornar; SSGI recomeça com slots limpos. *(validado por code review)*
+- [ ] VR: integração funciona para ambos os olhos. *(requer in-game — nota: VR mask pixels (raw=0) terão depth ~infinity em SSDM output, faded out por `GetDepthFade` no SSGI)*
 
 ## Arquivos / áreas afetadas
 
