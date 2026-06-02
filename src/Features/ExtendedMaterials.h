@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "Buffer.h"
 
 struct ExtendedMaterials : Feature
@@ -31,7 +33,8 @@ struct ExtendedMaterials : Feature
 		uint EnableTerrain = 0;
 		uint EnableHeightBlending = 1;
 
-		float DisplacementScale = 0.05f;
+		// Multiplier on material-authored displacement (1 = default). Legacy saves used ~0.05 as absolute scale.
+		float DisplacementScale = 1.0f;
 		float pad[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
@@ -56,36 +59,46 @@ struct ExtendedMaterials : Feature
 	virtual bool SupportsVR() override { return true; };
 	virtual bool IsCore() const override { return true; };
 
-	// SSDM resources
+	// SSDM: lighting writes duv in RG and coverage in B of texDisplacement mip0; solve writes UV (RG), validity (Z), and coverage (W).
 	static constexpr int SSDM_MIP_LEVELS = 4;
-
-	struct alignas(16) SSDMCB
-	{
-		float FullDimX;
-		float FullDimY;
-		float RcpFullDimX;
-		float RcpFullDimY;
-		int MipLevel;
-		int IsCoarsest;
-		int SrcMipLevel;
-		int pad;
-	};
-	STATIC_ASSERT_ALIGNAS_16(SSDMCB);
-
-	eastl::unique_ptr<ConstantBuffer> ssdmCB;
 
 	eastl::unique_ptr<Texture2D> texDisplacement;
 	winrt::com_ptr<ID3D11RenderTargetView> rtvDisplacement;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavDisplacement[SSDM_MIP_LEVELS];
+	// Single-mip SRVs for SSDMBuildPyramid: avoids SRV/UAV overlap on the same texture (full-chain SRV + mip UAV is undefined in D3D11).
+	winrt::com_ptr<ID3D11ShaderResourceView> srvDisplacementMip[SSDM_MIP_LEVELS];
 
-	eastl::unique_ptr<Texture2D> texSSDMLevel[SSDM_MIP_LEVELS];
-
-	winrt::com_ptr<ID3D11ComputeShader> ssdmBuildPyramidCS;
-	winrt::com_ptr<ID3D11ComputeShader> ssdmDisplaceCS;
-
-	winrt::com_ptr<ID3D11SamplerState> ssdmLinearSampler;
+	eastl::unique_ptr<Texture2D> texSSDM;
 
 	ID3D11ShaderResourceView* GetSSDMOffsetSRV() const;
 	ID3D11ShaderResourceView* GetHeightGBufferSRV() const;
 	void ClearDisplacementTexture();
+
+private:
+	void CompileSSDMComputeShadersIfNeeded();
+
+	struct alignas(16) SSDMSolveCB {
+		float surfaceWidth;
+		float surfaceHeight;
+		float bufferWidth;
+		float bufferHeight;
+		float rcpBufferWidth;
+		float rcpBufferHeight;
+		float maxStepUv;
+		float damping;
+		std::int32_t numMips;
+		std::int32_t numIters;
+		std::int32_t pad0;
+		std::int32_t pad1;
+		std::int32_t pad2;
+		std::int32_t pad3;
+		std::int32_t pad4;
+		std::int32_t pad5;
+	};
+	STATIC_ASSERT_ALIGNAS_16(SSDMSolveCB);
+	static_assert(sizeof(SSDMSolveCB) == 64);
+
+	winrt::com_ptr<ID3D11ComputeShader> ssdmBuildPyramidCS;
+	winrt::com_ptr<ID3D11ComputeShader> ssdmSolveCS;
+	eastl::unique_ptr<ConstantBuffer> cbufSSDMSolve;
 };

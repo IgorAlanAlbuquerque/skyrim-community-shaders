@@ -28,6 +28,8 @@ enum class PBRShaderFlags : uint32_t
 	HairMarschner = 1 << 10,
 	Glint = 1 << 11,
 	ProjectedGlint = 1 << 12,
+	/// Bit 13+ reserved for landscape PBR terrain flags in the same constant on terrain draws.
+	PackedDisplacementInRmaosAlpha = 1 << 18,
 };
 
 class BSLightingShaderMaterialPBR : public RE::BSLightingShaderMaterialBase

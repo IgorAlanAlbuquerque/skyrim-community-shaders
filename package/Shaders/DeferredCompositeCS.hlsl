@@ -32,7 +32,7 @@ Texture2D<uint> StereoOptModeTexture : register(t16);
 #endif
 
 #if defined(SSDM)
-Texture2D<float2> SSDMOffsetTexture : register(t17);
+Texture2D<float4> SSDMOffsetTexture : register(t17);
 Texture2D<float4> MainCopyTexture : register(t18);
 #endif
 
@@ -118,12 +118,37 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 	uv = Stereo::ConvertFromStereoUV(uv, eyeIndex);
 
+	float depth = DepthTexture[dispatchID.xy];
+	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
+	positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);
+	positionWS.xyz = positionWS.xyz / positionWS.w;
+
 	uint2 gbufferCoord = dispatchID.xy;
 #if defined(SSDM)
 	{
-		float2 sourceUV = SSDMOffsetTexture[dispatchID.xy];
-		if (any(sourceUV != 0))
-			gbufferCoord = uint2(clamp(sourceUV * SharedData::BufferDim.xy, 0, SharedData::BufferDim.xy - 1));
+		float2 uvBuf = (float2(dispatchID.xy) + 0.5) * SharedData::BufferDim.zw;
+		float4 ssdmSample = SSDMOffsetTexture[dispatchID.xy];
+		float2 sourceUV = ssdmSample.xy;
+		float ssdmValid = ssdmSample.z;
+		float ssdmCoverage = ssdmSample.w;
+		// Derive border guard from actual remap reach (in pixels) plus one pixel for safe bilinear footprint.
+		float2 remapPx = ceil(abs((sourceUV - uvBuf) * SharedData::BufferDim.xy));
+		float2 guardPx = max(remapPx, 1.0.xx);
+		float2 guardUV = guardPx * SharedData::BufferDim.zw;
+		bool dstInsideGuard = all(uvBuf > guardUV && uvBuf < (1.0 - guardUV));
+		bool srcInsideGuard = all(sourceUV > guardUV && sourceUV < (1.0 - guardUV));
+		// Do not use SharedData::ConvertUVToSampleCoord — that path expects per-eye mono UV (then
+		// stereo-packs + DR-adjusts) like depth reads from ViewToUV; applying it here double-packs
+		// VR and skews flat/DR, which reads the wrong gbuffer columns (split / ghost image).
+		bool allowRemap = depth < 1.0 && ssdmValid > 0.5 && ssdmCoverage > 0.0 && dstInsideGuard && srcInsideGuard;
+		if (allowRemap) {
+			uint2 remapCoord = uint2(clamp(sourceUV.xy * SharedData::BufferDim.xy, float2(0, 0), SharedData::BufferDim.xy - 1.0));
+			float depthRemap = DepthTexture[remapCoord];
+			if (depthRemap >= 1.0 || depthRemap < 1e-5)
+				allowRemap = false;
+			if (allowRemap)
+				gbufferCoord = remapCoord;
+		}
 	}
 #endif
 
@@ -137,11 +162,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 #endif
 	float3 specularColor = SpecularTexture[gbufferCoord];
 	float3 albedo = AlbedoTexture[gbufferCoord];
-
-	float depth = DepthTexture[dispatchID.xy];
-	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
-	positionWS = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], positionWS);
-	positionWS.xyz = positionWS.xyz / positionWS.w;
 
 	if (depth == 1.0)
 		MotionVectorsRW[dispatchID.xy] = MotionBlur::GetSSMotionVector(positionWS, positionWS, eyeIndex);  // Apply sky motion vectors

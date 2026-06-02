@@ -1015,8 +1015,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	else
 	float mipLevel = 0;
 #	endif  // LANDSCAPE
-	float2 ssdmDisplacement = float2(0, 0);
-	float  ssdmRawHeight = 0.0;
+	float3 ssdmViewDir = viewDirection;
+	float ssdmHeight = 0.0;
+	float ssdmDispScale = 0.0;
+	bool ssdmActive = false;
 
 #	if defined(EMAT)
 #		if defined(LANDSCAPE)
@@ -1047,16 +1049,35 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 complexSpecular = 1.0;  // Declare complexSpecular at a higher scope so it's available throughout the shader (NEEDED FOR STOCH. FIX)
 
 #	if defined(EMAT)
-#		if defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
+	// Optional multiplier (default 1). Amplitude follows material data: ParallaxOccData.x (vanilla),
+	// PBRParams1.y inside sampled height / pbrRelief, terrain HeightScale in GetTerrainHeight.
+	static const float kEmatAuthoredDispRef = 0.05;
+	float ematDispMult = max(SharedData::extendedMaterialSettings.DisplacementScale, 0.01);
+#		if !defined(TRUE_PBR)
+	float ematMeshDispMag = kEmatAuthoredDispRef * ematDispMult * max(ParallaxOccData.x, 1e-4);
+#		elif !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+	float ematMeshDispMag = kEmatAuthoredDispRef * ematDispMult;
+#		endif
+#		if defined(LANDSCAPE)
+	float ematTerrainDispMag = kEmatAuthoredDispRef * ematDispMult;
+#		endif
+#		if defined(PARALLAX) && !defined(TRUE_PBR)
 	if (SharedData::extendedMaterialSettings.EnableParallax) {
-		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
-		float height = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
-		ssdmRawHeight = height;
+		// Vanilla-style parallax maps store height in alpha (e.g. DXT5); red is not used for relief.
+		// Use mesh UV + implicit mip (Sample) on meshes so height matches forward parallax filtering.
+		// Triplanar + one mip from UV was smearing three mismatched mips and caused swirl at blend zones.
+#			if defined(LANDSCAPE) || defined(LODLANDSCAPE)
+		mipLevel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexParallaxSampler);
+		float height = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).w;
+#			else
+		float height = TexParallaxSampler.Sample(SampParallaxSampler, uv).w;
+#			endif
 		height = ExtendedMaterials::AdjustDisplacementNormalized(height, displacementParams);
-		float3 normalVS = normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, normalVS, height - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmActive = true;
+		ssdmHeight = height - 0.5;
+		ssdmDispScale = ematMeshDispMag;
 	}
-#		endif  // defined(PARALLAX) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
+#		endif  // PARALLAX && !TRUE_PBR
 
 	bool complexMaterial = false;
 	bool complexMaterialParallax = false;
@@ -1079,12 +1100,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (complexMaterial) {
 			if (envMaskSample.w > kMaskEpsilon && envMaskSample.w < (1.0 - kMaskEpsilon)) {
 				complexMaterialParallax = true;
-				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler, screenNoise);
+#				if defined(LANDSCAPE) || defined(LODLANDSCAPE)
+				mipLevel = ExtendedMaterials::GetMipLevelForDisplacement(uv, TexEnvMaskSampler);
 				float cmHeight = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, mipLevel).w;
-				ssdmRawHeight = cmHeight;
+#				else
+				float cmHeight = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv).w;
+#				endif
 				cmHeight = ExtendedMaterials::AdjustDisplacementNormalized(cmHeight, displacementParams);
-				float3 cmNormalVS =  normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
-				ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, cmNormalVS, cmHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+				ssdmActive = true;
+				ssdmHeight = cmHeight - 0.5;
+				ssdmDispScale = ematMeshDispMag;
 				complexMaterialColor = TexEnvMaskSampler.Sample(SampEnvMaskSampler, uv);
 			} else {
 				complexMaterialColor = envMaskSample;
@@ -1103,7 +1128,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		sampledCoatColor.a *= sampledCoatProperties.a;
 	}
 #			if !defined(FACEGEN)
-	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
+	[branch] if (SharedData::extendedMaterialSettings.EnableParallax &&
+		(((PBRFlags & PBR::Flags::HasDisplacement) != 0) || ((PBRFlags & PBR::Flags::PackedDisplacementInRmaosAlpha) != 0)))
 	{
 		PBRParallax = true;
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
@@ -1124,16 +1150,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			entryNormal = normalize(mul(tbn, entryNormalTS));
 			refractedViewDirection = -refract(-viewDirection, entryNormal, eta);
 		}
+		float pbrHeight;
+		[branch] if ((PBRFlags & PBR::Flags::PackedDisplacementInRmaosAlpha) != 0)
+		{
+			pbrHeight = TexRMAOSSampler.Sample(SampRMAOSSampler, uv).a;
+		}
 		else
 		{
-			displacementParams.HeightScale *= PBRParams1.y;
+			pbrHeight = TexParallaxSampler.Sample(SampParallaxSampler, uv).x;
 		}
-		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler, screenNoise);
-		float pbrHeight = TexParallaxSampler.SampleLevel(SampParallaxSampler, uv, mipLevel).x;
-		ssdmRawHeight = pbrHeight;
 		pbrHeight = ExtendedMaterials::AdjustDisplacementNormalized(pbrHeight, displacementParams);
-		float3 pbrNormalVS = normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, pbrNormalVS, pbrHeight - 0.5, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		const float pbrRelief = (pbrHeight - 0.5) * PBRParams1.y;
+		ssdmActive = true;
+		ssdmViewDir = refractedViewDirection;
+		ssdmHeight = pbrRelief;
+		ssdmDispScale = ematMeshDispMag;
 	}
 #			endif  // !FACEGEN
 #		endif      // TRUE_PBR
@@ -1201,12 +1232,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			else
 	if (SharedData::extendedMaterialSettings.EnableTerrain || (SharedData::extendedMaterialSettings.EnableParallax && Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLandHasDisplacement)) {
 #			endif
-		mipLevels[0] = ExtendedMaterials::GetMipLevel(uv, TexColorSampler, screenNoise);
-		mipLevels[1] = ExtendedMaterials::GetMipLevel(uv, TexLandColor2Sampler, screenNoise);
-		mipLevels[2] = ExtendedMaterials::GetMipLevel(uv, TexLandColor3Sampler, screenNoise);
-		mipLevels[3] = ExtendedMaterials::GetMipLevel(uv, TexLandColor4Sampler, screenNoise);
-		mipLevels[4] = ExtendedMaterials::GetMipLevel(uv, TexLandColor5Sampler, screenNoise);
-		mipLevels[5] = ExtendedMaterials::GetMipLevel(uv, TexLandColor6Sampler, screenNoise);
 
 		displacementParams[1] = displacementParams[0];
 		displacementParams[2] = displacementParams[0];
@@ -1237,9 +1262,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
 		}
-		float3 terrainNormalVS =  normalize(FrameBuffer::WorldToView(tbnTr[2], false, eyeIndex));
-		ssdmRawHeight = saturate(terrainHeight + 0.5);
-		ssdmDisplacement = ExtendedMaterials::ComputeDisplacementVector(viewPosition, terrainNormalVS, terrainHeight, SharedData::extendedMaterialSettings.DisplacementScale, eyeIndex);
+		ssdmActive = true;
+		ssdmHeight = terrainHeight;
+		ssdmDispScale = ematTerrainDispMag;
 	}
 #			if defined(TERRAIN_VARIATION)
 	else if (useTerrainVariation) {
@@ -3167,7 +3192,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(screenSpaceNormal), saturate(1.0 - material.Roughness), psout.Diffuse.w);
 
 #		if defined(DEFERRED)
-	psout.SSDMDisplacement = float4(ssdmDisplacement, ssdmRawHeight, 0.0);
+	// RG: duv for SSDM pyramid + solve; B: SSDM coverage, A unused. Cleared to 0 before the pass.
+	float4 ssdmPack = float4(0, 0, 0, 0);
+#			if defined(EMAT)
+	if (ssdmActive) {
+		float2 duv = ExtendedMaterials::ComputeDisplacementVector(
+			viewPosition, ssdmViewDir, tbnTr[0], tbnTr[1], tbnTr[2], ssdmHeight, ssdmDispScale, eyeIndex);
+		ssdmPack = float4(duv, 1.0, 0.0);
+	}
+#			endif
+	psout.SSDMDisplacement = ssdmPack;
 #		endif
 
 #		if defined(SNOW)

@@ -1,30 +1,23 @@
-// SSDM: Screen Space Displacement Mapping - Mip Pyramid Builder
-// Downsamples the displacement vector texture from level 0 → levels 1..N
-// by averaging 4 texels per upper-level texel.
+// SSDM: downsample per-pixel displacement (duv) to coarser mips by averaging 2×2 finer texels.
+// SrcDuv is bound as a single-mip SRV (the source mip). Load(..., 0) uses mip 0 of that view.
 
-cbuffer SSDMParams : register(b0)
-{
-	float2 SrcDim;
-	float2 RcpSrcDim;
-	int SrcMipLevel;
-	int pad0;
-	int pad1;
-	int pad2;
-};
-
-Texture2D<float4> SrcTexture : register(t0);
-RWTexture2D<float4> DstTexture : register(u0);
-SamplerState LinearSampler : register(s0);
+Texture2D<float4> SrcDuv : register(t0);
+RWTexture2D<float4> DstDuv : register(u0);
 
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID)
 {
 	uint2 dstDim;
-	DstTexture.GetDimensions(dstDim.x, dstDim.y);
+	DstDuv.GetDimensions(dstDim.x, dstDim.y);
 	if (any(dtid.xy >= dstDim))
 		return;
 
-	float2 uv = (float2(dtid.xy) + 0.5) / float2(dstDim);
-	float2 uvDelta = SrcTexture.SampleLevel(LinearSampler, uv, SrcMipLevel).rg;
-	DstTexture[dtid.xy] = float4(uvDelta, 0.0, 0.0);
+	int2 base = int2(dtid.xy) * 2;
+	float4 v00 = SrcDuv.Load(int3(base + int2(0, 0), 0));
+	float4 v10 = SrcDuv.Load(int3(base + int2(1, 0), 0));
+	float4 v01 = SrcDuv.Load(int3(base + int2(0, 1), 0));
+	float4 v11 = SrcDuv.Load(int3(base + int2(1, 1), 0));
+	float2 duvAvg = (v00.xy + v10.xy + v01.xy + v11.xy) * 0.25;
+	float cov = (v00.z + v10.z + v01.z + v11.z) * 0.25;
+	DstDuv[dtid.xy] = float4(duvAvg, cov, 0.0);
 }

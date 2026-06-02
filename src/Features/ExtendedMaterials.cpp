@@ -1,9 +1,16 @@
 #include "ExtendedMaterials.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <imgui.h>
+
 #include "Deferred.h"
 #include "Globals.h"
 #include "Features/ScreenSpaceDisplacementMapping.h"
 #include "State.h"
+#include "Util.h"
+#include "Utils/D3D.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ExtendedMaterials::Settings,
@@ -42,9 +49,14 @@ void ExtendedMaterials::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Screen Space Displacement", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Enable Displacement", (bool*)&settings.EnableParallax);
-		if (auto _tt = Util::HoverTooltipWrapper())
+		if (ImGui::Checkbox("Enable Displacement", (bool*)&settings.EnableParallax)) {
+			// DeferredCompositeCS is built with or without SSDM based on this flag; mismatch causes
+			// null SRV reads (black sky / corrupt frame) or SSDM appearing to do nothing until cache clear.
+			globals::deferred->ClearShaderCache();
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables screen-space displacement mapping (SSDM) on meshes and terrain.");
+		}
 
 		if (settings.EnableParallax)
 			globals::features::screenSpaceDisplacementMapping.DrawInlineSettings();
@@ -65,9 +77,11 @@ void ExtendedMaterials::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Enables landscape texture blending based on height. ");
 		}
-		ImGui::SliderFloat("Displacement Scale", &settings.DisplacementScale, 0.001f, 0.2f, "%.3f");
+		ImGui::SliderFloat("Displacement intensity (× authored)", &settings.DisplacementScale, 0.0f, 4.0f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Controls the strength of screen-space displacement. Higher values produce more dramatic depth.");
+			ImGui::Text(
+				"Multiplies engine / texture displacement strength (vanilla ParallaxOccData, True PBR height scale, terrain heightmaps). "
+				"1 matches authored materials; raise or lower only if you want a global tweak.");
 		}
 
 		ImGui::Spacing();
@@ -80,17 +94,24 @@ void ExtendedMaterials::DrawSettings()
 	if (ImGui::TreeNode("Buffer Viewer")) {
 		static float debugRescale = .3f;
 		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::TextWrapped(
+			"Displacement and SSDM targets are RGBA32F; RG are often tiny signed values, so previews can look black or flat even when data is present. "
+			"Use the numeric thresholds above or an external capture tool if you need exact duv magnitudes.");
 
-		BUFFER_VIEWER_NODE_TITLE(texDisplacement, "Displacement", debugRescale);
+		if (!texDisplacement || !texDisplacement->srv.get()) {
+			ImGui::BulletText("Displacement RT not allocated yet (load into the game world after enabling the feature).");
+		} else {
+			BUFFER_VIEWER_NODE_TITLE(texDisplacement, "Displacement (RG = duv)", debugRescale);
+		}
 
-		for (int i = 0; i < SSDM_MIP_LEVELS; ++i) {
-			if (texSSDMLevel[i] && texSSDMLevel[i]->srv.get()) {
-				char buf[128];
-				snprintf(buf, sizeof(buf), "SSDM Level %d (%ux%u)", i, texSSDMLevel[i]->desc.Width, texSSDMLevel[i]->desc.Height);
-				if (ImGui::TreeNode(buf)) {
-					ImGui::Image(texSSDMLevel[i]->srv.get(), { texSSDMLevel[i]->desc.Width * debugRescale, texSSDMLevel[i]->desc.Height * debugRescale });
-					ImGui::TreePop();
-				}
+		if (texSSDM && texSSDM->srv.get()) {
+			char buf[128];
+			snprintf(buf, sizeof(buf), "SSDM solve output (%ux%u)", texSSDM->desc.Width, texSSDM->desc.Height);
+			if (ImGui::TreeNode(buf)) {
+				ImGui::Image(
+					ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(texSSDM->srv.get()))),
+					{ texSSDM->desc.Width * debugRescale, texSSDM->desc.Height * debugRescale });
+				ImGui::TreePop();
 			}
 		}
 
@@ -100,7 +121,15 @@ void ExtendedMaterials::DrawSettings()
 
 void ExtendedMaterials::LoadSettings(json& o_json)
 {
+	const bool prevDisplacement = settings.EnableParallax != 0;
 	settings = o_json;
+	// Older configs stored absolute scale (~0.05 neutral, slider max ~0.2). Convert to multiplier (~1 neutral).
+	if (settings.DisplacementScale > 0.001f && settings.DisplacementScale < 0.21f) {
+		settings.DisplacementScale = std::clamp(settings.DisplacementScale / 0.05f, 0.25f, 5.0f);
+	}
+	if (prevDisplacement != (settings.EnableParallax != 0)) {
+		globals::deferred->ClearShaderCache();
+	}
 }
 
 void ExtendedMaterials::SaveSettings(json& o_json)
@@ -111,6 +140,7 @@ void ExtendedMaterials::SaveSettings(json& o_json)
 void ExtendedMaterials::RestoreDefaultSettings()
 {
 	settings = {};
+	globals::deferred->ClearShaderCache();
 }
 
 bool ExtendedMaterials::HasShaderDefine(RE::BSShader::Type shaderType)
@@ -141,7 +171,7 @@ void ExtendedMaterials::SetupResources()
 			.Height = h,
 			.MipLevels = SSDM_MIP_LEVELS,
 			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.SampleDesc = { .Count = 1, .Quality = 0 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS,
@@ -151,62 +181,55 @@ void ExtendedMaterials::SetupResources()
 
 		texDisplacement = eastl::make_unique<Texture2D>(texDesc);
 		texDisplacement->CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC{
-			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = SSDM_MIP_LEVELS } });
 
-		CD3D11_RENDER_TARGET_VIEW_DESC rtvDesc(D3D11_RTV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R16G16B16A16_FLOAT, 0);
+		CD3D11_RENDER_TARGET_VIEW_DESC rtvDesc(D3D11_RTV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R32G32B32A32_FLOAT, 0);
 		DX::ThrowIfFailed(device->CreateRenderTargetView(texDisplacement->resource.get(), &rtvDesc, rtvDisplacement.put()));
 
 		for (int i = 0; i < SSDM_MIP_LEVELS; ++i) {
 			D3D11_UNORDERED_ACCESS_VIEW_DESC mipUav = {
-				.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+				.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 				.Texture2D = { .MipSlice = (UINT)i }
 			};
 			DX::ThrowIfFailed(device->CreateUnorderedAccessView(texDisplacement->resource.get(), &mipUav, uavDisplacement[i].put()));
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC mipSrv = {
+				.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MostDetailedMip = (UINT)i, .MipLevels = 1 },
+			};
+			DX::ThrowIfFailed(device->CreateShaderResourceView(texDisplacement->resource.get(), &mipSrv, srvDisplacementMip[i].put()));
 		}
 	}
 
-	for (int i = 0; i < SSDM_MIP_LEVELS; ++i) {
-		D3D11_TEXTURE2D_DESC levelDesc = {
-			.Width = std::max(1u, w >> i),
-			.Height = std::max(1u, h >> i),
+	{
+		D3D11_TEXTURE2D_DESC ssdmDesc = {
+			.Width = w,
+			.Height = h,
 			.MipLevels = 1,
 			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R16G16_FLOAT,
+			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.SampleDesc = { .Count = 1, .Quality = 0 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
 			.CPUAccessFlags = 0,
 			.MiscFlags = 0
 		};
-
-		texSSDMLevel[i] = eastl::make_unique<Texture2D>(levelDesc);
-		texSSDMLevel[i]->CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC{
-			.Format = DXGI_FORMAT_R16G16_FLOAT,
+		texSSDM = eastl::make_unique<Texture2D>(ssdmDesc);
+		texSSDM->CreateSRV(D3D11_SHADER_RESOURCE_VIEW_DESC{
+			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
-		texSSDMLevel[i]->CreateUAV(D3D11_UNORDERED_ACCESS_VIEW_DESC{
-			.Format = DXGI_FORMAT_R16G16_FLOAT,
+		texSSDM->CreateUAV(D3D11_UNORDERED_ACCESS_VIEW_DESC{
+			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 } });
 	}
 
-	ssdmCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<SSDMCB>());
-
-	{
-		D3D11_SAMPLER_DESC samplerDesc = {
-			.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-			.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP,
-			.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP,
-			.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP,
-			.MaxAnisotropy = 1,
-			.MinLOD = 0,
-			.MaxLOD = D3D11_FLOAT32_MAX
-		};
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, ssdmLinearSampler.put()));
-	}
+	cbufSSDMSolve = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc(sizeof(SSDMSolveCB), false));
 
 	ClearShaderCache();
 }
@@ -214,17 +237,7 @@ void ExtendedMaterials::SetupResources()
 void ExtendedMaterials::ClearShaderCache()
 {
 	ssdmBuildPyramidCS = nullptr;
-	ssdmDisplaceCS = nullptr;
-
-	auto shaderDir = std::filesystem::path("Data\\Shaders\\ExtendedMaterials");
-
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(
-			Util::CompileShader((shaderDir / "SSDMBuildPyramidCS.hlsl").c_str(), {}, "cs_5_0")))
-		ssdmBuildPyramidCS.attach(rawPtr);
-
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(
-			Util::CompileShader((shaderDir / "SSDMDisplaceCS.hlsl").c_str(), {}, "cs_5_0")))
-		ssdmDisplaceCS.attach(rawPtr);
+	ssdmSolveCS = nullptr;
 }
 
 void ExtendedMaterials::RegisterDisplacementRT()
@@ -240,7 +253,7 @@ void ExtendedMaterials::RegisterDisplacementRT()
 
 ID3D11ShaderResourceView* ExtendedMaterials::GetSSDMOffsetSRV() const
 {
-	return (texSSDMLevel[0] && settings.EnableParallax) ? texSSDMLevel[0]->srv.get() : nullptr;
+	return (texSSDM && settings.EnableParallax) ? texSSDM->srv.get() : nullptr;
 }
 
 ID3D11ShaderResourceView* ExtendedMaterials::GetHeightGBufferSRV() const
@@ -256,92 +269,116 @@ void ExtendedMaterials::ClearDisplacementTexture()
 	globals::d3d::context->ClearRenderTargetView(rtvDisplacement.get(), clearColor);
 }
 
+void ExtendedMaterials::CompileSSDMComputeShadersIfNeeded()
+{
+	const std::vector<std::pair<const char*, const char*>> defines{};
+
+	if (!ssdmBuildPyramidCS || !ssdmSolveCS) {
+		ssdmBuildPyramidCS = nullptr;
+		ssdmSolveCS = nullptr;
+
+		winrt::com_ptr<ID3D11ComputeShader> pyramid;
+		winrt::com_ptr<ID3D11ComputeShader> solve;
+
+		if (auto* raw = Util::CompileShader(L"Data\\Shaders\\ExtendedMaterials\\SSDMBuildPyramidCS.hlsl", defines, "cs_5_0")) {
+			pyramid.attach(reinterpret_cast<ID3D11ComputeShader*>(raw));
+			Util::SetResourceName(pyramid.get(), "SSDMBuildPyramidCS");
+		} else {
+			logger::error("[ExtendedMaterials] Failed to compile SSDMBuildPyramidCS.hlsl");
+		}
+		if (auto* raw = Util::CompileShader(L"Data\\Shaders\\ExtendedMaterials\\SSDMSolveCS.hlsl", defines, "cs_5_0")) {
+			solve.attach(reinterpret_cast<ID3D11ComputeShader*>(raw));
+			Util::SetResourceName(solve.get(), "SSDMSolveCS");
+		} else {
+			logger::error("[ExtendedMaterials] Failed to compile SSDMSolveCS.hlsl");
+		}
+
+		if (pyramid && solve) {
+			ssdmBuildPyramidCS = std::move(pyramid);
+			ssdmSolveCS = std::move(solve);
+		}
+	}
+}
+
 void ExtendedMaterials::DrawSSDM()
 {
 	if (!settings.EnableParallax)
 		return;
-	if (!ssdmBuildPyramidCS || !ssdmDisplaceCS)
+	if (!texDisplacement || !texSSDM || !cbufSSDMSolve)
 		return;
-	if (!texDisplacement || !texSSDMLevel[0])
+
+	CompileSSDMComputeShadersIfNeeded();
+	if (!ssdmBuildPyramidCS || !ssdmSolveCS)
 		return;
 
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "SSDM");
 
 	auto context = globals::d3d::context;
+	auto* deferred = Deferred::GetSingleton();
+	if (!deferred || !deferred->pointSampler)
+		return;
 
-	uint w = texDisplacement->desc.Width;
-	uint h = texDisplacement->desc.Height;
-	int maxMip = SSDM_MIP_LEVELS - 1;
+	const UINT bufW = texDisplacement->desc.Width;
+	const UINT bufH = texDisplacement->desc.Height;
+	const float2 dynRes = Util::ConvertToDynamic(float2{ static_cast<float>(bufW), static_cast<float>(bufH) });
+	const UINT surfaceW = std::min(bufW, std::max(1u, static_cast<UINT>(std::ceil(static_cast<double>(dynRes.x) - 1e-4))));
+	const UINT surfaceH = std::min(bufH, std::max(1u, static_cast<UINT>(std::ceil(static_cast<double>(dynRes.y) - 1e-4))));
 
-	ID3D11SamplerState* samplers[] = { ssdmLinearSampler.get() };
-	context->CSSetSamplers(0, 1, samplers);
+	const Util::DispatchCount solveDispatch = Util::GetScreenDispatchCount(true);
 
-	ID3D11Buffer* cbs[] = { ssdmCB->CB() };
-	context->CSSetConstantBuffers(0, 1, cbs);
+	const float z[4] = { 0.f, 0.f, 0.f, 0.f };
+	context->ClearUnorderedAccessViewFloat(texSSDM->uav.get(), z);
 
-	// Build mip pyramid of displacement vectors (level 0 → levels 1..maxMip)
-	context->CSSetShader(ssdmBuildPyramidCS.get(), nullptr, 0);
-	for (int mip = 1; mip <= maxMip; ++mip) {
-		SSDMCB cb = {};
-		cb.FullDimX = (float)w;
-		cb.FullDimY = (float)h;
-		cb.RcpFullDimX = 1.0f / w;
-		cb.RcpFullDimY = 1.0f / h;
-		cb.SrcMipLevel = mip - 1;
-		ssdmCB->Update(cb);
-
-		ID3D11ShaderResourceView* srvs[] = { texDisplacement->srv.get() };
-		context->CSSetShaderResources(0, 1, srvs);
-
-		ID3D11UnorderedAccessView* uavs[] = { uavDisplacement[mip].get() };
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-		uint dw = std::max(1u, w >> mip);
-		uint dh = std::max(1u, h >> mip);
-		context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
-
-		ID3D11ShaderResourceView* nullSrv[] = { nullptr };
-		ID3D11UnorderedAccessView* nullUav[] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSrv);
-		context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
+	for (int dstMip = 1; dstMip < SSDM_MIP_LEVELS; ++dstMip) {
+		const int srcMip = dstMip - 1;
+		ID3D11ShaderResourceView* srcSrv = srvDisplacementMip[srcMip].get();
+		context->CSSetShaderResources(0, 1, &srcSrv);
+		ID3D11UnorderedAccessView* dstUav = uavDisplacement[dstMip].get();
+		context->CSSetUnorderedAccessViews(0, 1, &dstUav, nullptr);
+		context->CSSetShader(ssdmBuildPyramidCS.get(), nullptr, 0);
+		const UINT mw = std::max(1u, bufW >> dstMip);
+		const UINT mh = std::max(1u, bufH >> dstMip);
+		context->Dispatch((mw + 7u) / 8u, (mh + 7u) / 8u, 1);
 	}
 
-	// Iterative refinement: coarse (maxMip) → fine (0)
-	context->CSSetShader(ssdmDisplaceCS.get(), nullptr, 0);
-	for (int mip = maxMip; mip >= 0; --mip) {
-		SSDMCB cb = {};
-		cb.FullDimX = (float)w;
-		cb.FullDimY = (float)h;
-		cb.RcpFullDimX = 1.0f / w;
-		cb.RcpFullDimY = 1.0f / h;
-		cb.MipLevel = mip;
-		cb.IsCoarsest = (mip == maxMip) ? 1 : 0;
-		ssdmCB->Update(cb);
+	ID3D11ShaderResourceView* nullSrv = nullptr;
+	ID3D11UnorderedAccessView* nullUav = nullptr;
+	context->CSSetShaderResources(0, 1, &nullSrv);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 
-		ID3D11ShaderResourceView* srvs[2] = {
-			texDisplacement->srv.get(),
-			(mip < maxMip) ? texSSDMLevel[mip + 1]->srv.get() : nullptr
-		};
-		context->CSSetShaderResources(0, 2, srvs);
+	SSDMSolveCB solveData{};
+	solveData.surfaceWidth = static_cast<float>(surfaceW);
+	solveData.surfaceHeight = static_cast<float>(surfaceH);
+	solveData.bufferWidth = static_cast<float>(bufW);
+	solveData.bufferHeight = static_cast<float>(bufH);
+	solveData.rcpBufferWidth = bufW ? 1.0f / static_cast<float>(bufW) : 0.0f;
+	solveData.rcpBufferHeight = bufH ? 1.0f / static_cast<float>(bufH) : 0.0f;
+	solveData.maxStepUv = 0.35f;  // Picard iteration step clamp for numerical stability.
+	solveData.damping = 0.62f;
+	solveData.numMips = SSDM_MIP_LEVELS;
+	solveData.numIters = 8;
+	solveData.pad0 = solveData.pad1 = solveData.pad2 = solveData.pad3 = solveData.pad4 = solveData.pad5 = 0;
+	cbufSSDMSolve->Update(solveData);
 
-		ID3D11UnorderedAccessView* uavs[] = { texSSDMLevel[mip]->uav.get() };
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-
-		uint dw = std::max(1u, w >> mip);
-		uint dh = std::max(1u, h >> mip);
-		context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
-
-		ID3D11ShaderResourceView* nullSrvs[2] = { nullptr, nullptr };
-		ID3D11UnorderedAccessView* nullUav[] = { nullptr };
-		context->CSSetShaderResources(0, 2, nullSrvs);
-		context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
+	ID3D11Buffer* cbSolve = cbufSSDMSolve->CB();
+	context->CSSetConstantBuffers(0, 1, &cbSolve);
+	ID3D11ShaderResourceView* duvSRV = texDisplacement->srv.get();
+	context->CSSetShaderResources(0, 1, &duvSRV);
+	ID3D11SamplerState* solveSamplers[] = { deferred->pointSampler };
+	context->CSSetSamplers(0, 1, solveSamplers);
+	{
+		ID3D11UnorderedAccessView* uavSolve = texSSDM->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uavSolve, nullptr);
 	}
+	context->CSSetShader(ssdmSolveCS.get(), nullptr, 0);
+	context->Dispatch(solveDispatch.x, solveDispatch.y, 1);
 
-	// Cleanup
 	context->CSSetShader(nullptr, nullptr, 0);
-	ID3D11Buffer* nullCb[] = { nullptr };
-	context->CSSetConstantBuffers(0, 1, nullCb);
-	ID3D11SamplerState* nullSampler[] = { nullptr };
-	context->CSSetSamplers(0, 1, nullSampler);
+	context->CSSetShaderResources(0, 1, &nullSrv);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+	ID3D11SamplerState* nullSamps[] = { nullptr };
+	context->CSSetSamplers(0, 1, nullSamps);
+	ID3D11Buffer* nullCb = nullptr;
+	context->CSSetConstantBuffers(0, 1, &nullCb);
 }
