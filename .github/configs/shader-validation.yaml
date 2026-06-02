@@ -245,6 +245,14 @@ file_common_defines:
         VSHADER:
             - SHADOWSPLITCOUNT=3
         CSHADER: []
+    SSDMBuildPyramidCS.hlsl:
+        PSHADER: []
+        VSHADER: []
+        CSHADER: []
+    SSDMSolveCS.hlsl:
+        PSHADER: []
+        VSHADER: []
+        CSHADER: []
 warnings:
     x4000:use of potentially uninitialized variable (grasscollision::getdisplacedposition):
         code: X4000
